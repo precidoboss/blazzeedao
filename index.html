@@ -1,4 +1,3 @@
-
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -64,6 +63,7 @@ let provider = null, signer = null, userAddress = null;
 let escrow = null, escrowRead = null, blaze = null, blazeRead = null;
 let blazeDecimals = 18;
 let prevPage = 'home';
+let blazeProfile = null; // { username, displayName, avatarUrl, id } — set after OAuth
 let blazeProfile = null; // { username, displayName, avatarUrl, id } — set after OAuth
 
 function initSupabase() {
@@ -239,10 +239,18 @@ async function checkBlazeStatus() {
         badge.innerHTML = `${data.avatar ? `<img src="${escHtml(data.avatar)}" style="width:18px;height:18px;border-radius:50%;object-fit:cover;border:1px solid rgba(255,107,26,0.4);" onerror="this.style.display='none'"/>` : '<svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>'} ${escHtml(data.handle || 'Blaze')}`;
         badge.style.display = 'inline-flex';
       }
+      if (!blazeProfile) blazeProfile = { username: data.handle, avatarUrl: data.avatar };
+      if (badge) {
+        badge.innerHTML = `${data.avatar ? `<img src="${escHtml(data.avatar)}" style="width:18px;height:18px;border-radius:50%;object-fit:cover;border:1px solid rgba(255,107,26,0.4);" onerror="this.style.display='none'"/>` : '<svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>'} ${escHtml(data.handle || 'Blaze')}`;
+        badge.style.display = 'inline-flex';
+      }
       if (btn) btn.style.display = 'none';
       const pfBlaze = document.getElementById('pf-blazehandle');
       if (pfBlaze && !pfBlaze.value && data.handle) pfBlaze.value = data.handle;
+      const pfBlaze = document.getElementById('pf-blazehandle');
+      if (pfBlaze && !pfBlaze.value && data.handle) pfBlaze.value = data.handle;
     } else {
+      if (badge) badge.style.display = 'none';
       if (badge) badge.style.display = 'none';
       if (btn) btn.style.display = 'inline-flex';
     }
@@ -272,6 +280,23 @@ async function handleBlazeCallback() {
       sessionStorage.removeItem('blaze_state');
       sessionStorage.removeItem('blaze_verifier');
       sessionStorage.removeItem('clipdao_wallet');
+      // Store profile in memory — same fields hotemin uses: data.data || data
+      const u = data.data || data;
+      blazeProfile = { username: u.username || u.displayName, displayName: u.displayName, avatarUrl: u.avatarUrl, id: u.userId || u.id };
+      // Auto-fill profile form fields immediately
+      const pfBlaze = document.getElementById('pf-blazehandle');
+      const pfUser = document.getElementById('pf-username');
+      if (pfBlaze && blazeProfile.username) pfBlaze.value = blazeProfile.username;
+      if (pfUser && !pfUser.value && blazeProfile.displayName) pfUser.value = blazeProfile.displayName;
+      // Update nav badge with avatar + username
+      const badge = document.getElementById('blaze-connected-badge');
+      if (badge) {
+        badge.innerHTML = `${blazeProfile.avatarUrl ? `<img src="${escHtml(blazeProfile.avatarUrl)}" style="width:18px;height:18px;border-radius:50%;object-fit:cover;" onerror="this.style.display='none'"/>` : '<svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>'} ${escHtml(blazeProfile.username || 'Blaze')}`;
+        badge.style.display = 'inline-flex';
+      }
+      const blazeBtn = document.getElementById('btn-blaze');
+      if (blazeBtn) blazeBtn.style.display = 'none';
+      toast(`🔥 Blaze connected: @${blazeProfile.username || 'account'}`, 'success');
       // Store profile in memory — same fields hotemin uses: data.data || data
       const u = data.data || data;
       blazeProfile = { username: u.username || u.displayName, displayName: u.displayName, avatarUrl: u.avatarUrl, id: u.userId || u.id };
@@ -469,6 +494,16 @@ function setPbDuration(hrs, btn) {
 function autoDesc(text) {
   const el = document.getElementById('pb-description');
   if (el) { el.value = text; el.focus(); el.setSelectionRange(text.length, text.length); }
+function setPbDuration(hrs, btn) {
+  const el = document.getElementById('pb-duration');
+  if (el) el.value = hrs;
+  document.querySelectorAll('.pb-dur-btn').forEach(b => b.classList.remove('pb-dur-active'));
+  if (btn) btn.classList.add('pb-dur-active');
+}
+
+function autoDesc(text) {
+  const el = document.getElementById('pb-description');
+  if (el) { el.value = text; el.focus(); el.setSelectionRange(text.length, text.length); }
 }
 
 async function postBounty() {
@@ -484,8 +519,12 @@ async function postBounty() {
   const vodId       = document.getElementById('pb-vod')?.value.trim() || '';
   const description = document.getElementById('pb-description')?.value.trim();
   const mode        = parseInt(document.querySelector('input[name="pb-mode"]:checked')?.value ?? '0');
+  const mode        = parseInt(document.querySelector('input[name="pb-mode"]:checked')?.value ?? '0');
   const durationHrs = parseFloat(document.getElementById('pb-duration')?.value || '24');
 
+  if (!reward || reward <= 0)  { toast('Enter a valid $BLAZE reward', 'error'); return; }
+  if (!description)             { toast('Description is required', 'error'); return; }
+  if (durationHrs < 1)          { toast('Minimum 1 hour duration', 'error'); return; }
   if (!reward || reward <= 0)  { toast('Enter a valid $BLAZE reward', 'error'); return; }
   if (!description)             { toast('Description is required', 'error'); return; }
   if (durationHrs < 1)          { toast('Minimum 1 hour duration', 'error'); return; }
@@ -501,13 +540,20 @@ async function postBounty() {
     setTxStatus('tx-post', '⏳ Checking $BLAZE allowance…', 'info');
     const allowance = await blaze.allowance(userAddress, ESCROW_ADDRESS);
 
+
     if (allowance < rewardWei) {
+      setTxStatus('tx-post', '📝 Step 1/2 — Approve $BLAZE (sign in wallet)…', 'info');
+      // Use exact amount instead of MaxUint256 so user sees the real number in their wallet
       setTxStatus('tx-post', '📝 Step 1/2 — Approve $BLAZE (sign in wallet)…', 'info');
       // Use exact amount instead of MaxUint256 so user sees the real number in their wallet
       const approveTx = await blaze.approve(ESCROW_ADDRESS, rewardWei);
       setTxStatus('tx-post', '⏳ Waiting for approval confirmation…', 'info');
       await approveTx.wait(1); // wait 1 block only — faster than default
+      setTxStatus('tx-post', '⏳ Waiting for approval confirmation…', 'info');
+      await approveTx.wait(1); // wait 1 block only — faster than default
     }
+
+    setTxStatus('tx-post', '📝 Step 2/2 — Posting bounty (sign in wallet)…', 'info');
 
     setTxStatus('tx-post', '📝 Step 2/2 — Posting bounty (sign in wallet)…', 'info');
     const tx = await escrow.postBounty(rewardWei, vodId, description, mode, deadline);
@@ -523,9 +569,25 @@ async function postBounty() {
     });
     document.getElementById('pb-duration').value = '24';
 
+    setTxStatus('tx-post', '⏳ Confirming on-chain…', 'info');
+    await tx.wait(1);
+
+    setTxStatus('tx-post', '✅ Bounty posted! Redirecting…', 'success');
+    toast('🎉 Bounty live! Clippers can now submit.');
+
+    // Reset form
+    ['pb-reward','pb-vod','pb-description'].forEach(id => {
+      const el = document.getElementById(id); if (el) el.value = '';
+    });
+    document.getElementById('pb-duration').value = '24';
+
     loadBounties();
     setTimeout(() => showPage('bounties'), 1000);
+    setTimeout(() => showPage('bounties'), 1000);
   } catch(e) {
+    setTxStatus('tx-post', '❌ ' + friendlyError(e), 'error');
+  } finally {
+    if (btn) btn.disabled = false;
     setTxStatus('tx-post', '❌ ' + friendlyError(e), 'error');
   } finally {
     if (btn) btn.disabled = false;
@@ -543,6 +605,8 @@ async function openBountyDetail(bountyId) {
   el.innerHTML = '<p style="color:var(--muted);">Loading…</p>';
   try {
     const reader = escrowRead || new ethers.Contract(ESCROW_ADDRESS, ESCROW_ABI, new ethers.JsonRpcProvider(FUJI_RPC));
+    const [raw, subs] = await Promise.all([reader.getBounty(bountyId), reader.getSubmissions(bountyId)]);
+    const b = { streamer:raw[0], reward:raw[1], deadline:raw[2], postedAt:raw[3], mode:raw[4], status:raw[5], vodId:raw[6], description:raw[7], submissionCount:raw[8], resolvedAt:raw[9] };
     const [raw, subs] = await Promise.all([reader.getBounty(bountyId), reader.getSubmissions(bountyId)]);
     const b = { streamer:raw[0], reward:raw[1], deadline:raw[2], postedAt:raw[3], mode:raw[4], status:raw[5], vodId:raw[6], description:raw[7], submissionCount:raw[8], resolvedAt:raw[9] };
     const reward = parseFloat(ethers.formatUnits(b.reward, blazeDecimals));
@@ -846,6 +910,15 @@ document.addEventListener('DOMContentLoaded', () => {
   loadBounties();
   if (window.ethereum?.selectedAddress) connectWallet();
   handleBlazeCallback();
+
+  // Mode card radio toggle — highlight selected card
+  document.addEventListener('change', e => {
+    if (e.target.name === 'pb-mode') {
+      document.querySelectorAll('.pb-mode-card').forEach(c => c.classList.remove('pb-mode-active'));
+      e.target.closest('.pb-mode-card')?.classList.add('pb-mode-active');
+    }
+  });
+
 
   // Mode card radio toggle — highlight selected card
   document.addEventListener('change', e => {
@@ -1422,6 +1495,99 @@ textarea { resize: vertical; min-height: 76px; }
           <div class="pb-section-body">
             <input type="text" id="pb-vod" placeholder="Paste your Blaze stream link, VOD title, or leave blank for latest stream"/>
             <p class="pb-hint">Clippers will use this to know which stream to source their clip from.</p>
+          </div>
+        <div class="page-header"><h2>Post a Bounty</h2><p>Lock $BLAZE in escrow — clippers compete, you pick the winner.</p></div>
+
+        <!-- STEP 1: REWARD -->
+        <div class="pb-section">
+          <div class="pb-section-label"><span class="pb-step">1</span> Reward Amount</div>
+          <div class="pb-section-body">
+            <div style="position:relative;">
+              <input type="number" id="pb-reward" step="1" min="1" placeholder="0" style="padding-right:70px;font-size:1.1rem;font-weight:700;"/>
+              <span style="position:absolute;right:12px;top:50%;transform:translateY(-50%);font-size:0.75rem;color:var(--orange);font-weight:700;pointer-events:none;">$BLAZE</span>
+            </div>
+            <div class="pb-quick-row">
+              <span style="font-size:0.7rem;color:var(--muted);">Quick pick:</span>
+              <button class="pb-quick-btn" onclick="document.getElementById('pb-reward').value=100">100</button>
+              <button class="pb-quick-btn" onclick="document.getElementById('pb-reward').value=500">500</button>
+              <button class="pb-quick-btn" onclick="document.getElementById('pb-reward').value=1000">1,000</button>
+              <button class="pb-quick-btn" onclick="document.getElementById('pb-reward').value=5000">5,000</button>
+              <button class="pb-quick-btn" onclick="document.getElementById('pb-reward').value=10000">10K</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- STEP 2: SOURCE VOD -->
+        <div class="pb-section">
+          <div class="pb-section-label"><span class="pb-step">2</span> Source Stream / VOD <span class="pb-optional">optional but recommended</span></div>
+          <div class="pb-section-body">
+            <input type="text" id="pb-vod" placeholder="Paste your Blaze stream link, VOD title, or leave blank for latest stream"/>
+            <p class="pb-hint">Clippers will use this to know which stream to source their clip from.</p>
+          </div>
+        </div>
+
+        <!-- STEP 3: DESCRIPTION -->
+        <div class="pb-section">
+          <div class="pb-section-label"><span class="pb-step">3</span> What do you want clipped?</div>
+          <div class="pb-section-body">
+            <div class="pb-template-row">
+              <button class="pb-template-btn" onclick="autoDesc('Clip the funniest moment from my stream and post it to X to win!')">😂 Funny</button>
+              <button class="pb-template-btn" onclick="autoDesc('Best highlight or play from my stream — clip it and post to X!')">🎮 Highlight</button>
+              <button class="pb-template-btn" onclick="autoDesc('Clip the most hype moment from today\'s stream and post to X!')">🔥 Hype</button>
+              <button class="pb-template-btn" onclick="autoDesc('Most unexpected or emotional moment from my stream — clip and post to X!')">😮 Unexpected</button>
+              <button class="pb-template-btn" onclick="autoDesc('Best IRL or reaction moment from my stream — post to X to claim the reward!')">📸 IRL/Reaction</button>
+            </div>
+            <textarea id="pb-description" rows="4" placeholder="Describe exactly what you want clipped. Be specific — the better the brief, the better the clips."></textarea>
+          </div>
+        </div>
+
+        <!-- STEP 4: DURATION -->
+        <div class="pb-section">
+          <div class="pb-section-label"><span class="pb-step">4</span> Submission Window</div>
+          <div class="pb-section-body">
+            <div class="pb-dur-row">
+              <button class="pb-dur-btn" onclick="setPbDuration(1, this)">1 hour</button>
+              <button class="pb-dur-btn" onclick="setPbDuration(6, this)">6 hours</button>
+              <button class="pb-dur-btn pb-dur-active" onclick="setPbDuration(24, this)">24 hours</button>
+              <button class="pb-dur-btn" onclick="setPbDuration(48, this)">2 days</button>
+              <button class="pb-dur-btn" onclick="setPbDuration(168, this)">7 days</button>
+            </div>
+            <div style="display:flex;align-items:center;gap:8px;margin-top:8px;">
+              <input type="number" id="pb-duration" step="1" min="1" value="24" style="width:80px;text-align:center;"/>
+              <span style="font-size:0.8rem;color:var(--muted);">hours — clippers can submit until this window closes</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- STEP 5: MODE -->
+        <div class="pb-section">
+          <div class="pb-section-label"><span class="pb-step">5</span> How is the winner chosen?</div>
+          <div class="pb-section-body" style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+            <label class="pb-mode-card pb-mode-active">
+              <input type="radio" name="pb-mode" value="0" checked style="display:none;"/>
+              <div class="pb-mode-icon">🎯</div>
+              <div class="pb-mode-title">Streamer Picks</div>
+              <div class="pb-mode-desc">You manually choose the winner after reviewing all submissions</div>
+            </label>
+            <label class="pb-mode-card">
+              <input type="radio" name="pb-mode" value="1" style="display:none;"/>
+              <div class="pb-mode-icon">🗳</div>
+              <div class="pb-mode-title">Community Vote</div>
+              <div class="pb-mode-desc">Viewers vote — highest voted clip wins when deadline passes</div>
+            </label>
+          </div>
+        </div>
+
+        <!-- SUBMIT -->
+        <div style="margin-top:6px;">
+          <button class="btn btn-primary pb-submit-btn" onclick="postBounty()">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+            Post Bounty & Lock $BLAZE
+          </button>
+          <div id="tx-post" class="tx-status" style="display:none;"></div>
+          <div class="pb-footer-note">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+            If you haven't approved $BLAZE before, you'll sign twice — first to approve, then to post. Already approved? Just one signature.
           </div>
         </div>
 
