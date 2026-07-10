@@ -1,9 +1,0 @@
-cat > vercel.json << 'EOF'
-{
-  "functions": {
-    "api/**/*.js": {
-      "runtime": "nodejs20.x"
-    }
-  }
-}
-EOF
