@@ -395,45 +395,71 @@ function filterBounties(filter, btn) {
 }
 
 // ==================== POST BOUNTY ====================
-function getScheduleString() {
-  const hrs = parseFloat(document.getElementById('pb-duration')?.value || '24');
-  return `Submissions close in ${hrs} hours`;
+function setPbDuration(hrs, btn) {
+  const el = document.getElementById('pb-duration');
+  if (el) el.value = hrs;
+  document.querySelectorAll('.pb-dur-btn').forEach(b => b.classList.remove('pb-dur-active'));
+  if (btn) btn.classList.add('pb-dur-active');
+}
+
+function autoDesc(text) {
+  const el = document.getElementById('pb-description');
+  if (el) { el.value = text; el.focus(); el.setSelectionRange(text.length, text.length); }
 }
 
 async function postBounty() {
   if (!userAddress) { toast('Connect wallet first', 'error'); return; }
-  const reward = parseFloat(document.getElementById('pb-reward')?.value);
-  const vodId = document.getElementById('pb-vod')?.value.trim();
+  if (!escrow || !blaze) { toast('Wallet not ready — reconnect', 'error'); return; }
+
+  const reward      = parseFloat(document.getElementById('pb-reward')?.value);
+  const vodId       = document.getElementById('pb-vod')?.value.trim() || '';
   const description = document.getElementById('pb-description')?.value.trim();
-  const mode = parseInt(document.querySelector('input[name="pb-mode"]:checked')?.value ?? '0');
+  const mode        = parseInt(document.querySelector('input[name="pb-mode"]:checked')?.value ?? '0');
   const durationHrs = parseFloat(document.getElementById('pb-duration')?.value || '24');
 
-  if (!reward || reward <= 0) { toast('Enter a valid $BLAZE reward', 'error'); return; }
-  if (!description) { toast('Description is required', 'error'); return; }
-  if (durationHrs < 1) { toast('Duration must be at least 1 hour', 'error'); return; }
+  if (!reward || reward <= 0)  { toast('Enter a valid $BLAZE reward', 'error'); return; }
+  if (!description)             { toast('Description is required', 'error'); return; }
+  if (durationHrs < 1)          { toast('Minimum 1 hour duration', 'error'); return; }
 
   const rewardWei = ethers.parseUnits(reward.toString(), blazeDecimals);
-  const deadline = Math.floor(Date.now()/1000) + Math.floor(durationHrs * 3600);
+  const deadline  = Math.floor(Date.now()/1000) + Math.floor(durationHrs * 3600);
+
+  const btn = document.querySelector('#tab-post .btn-primary');
+  if (btn) btn.disabled = true;
 
   try {
-    setTxStatus('tx-post', 'Checking $BLAZE allowance…', 'info');
+    // Check allowance and approve in parallel with UX update
+    setTxStatus('tx-post', '⏳ Checking $BLAZE allowance…', 'info');
     const allowance = await blaze.allowance(userAddress, ESCROW_ADDRESS);
+
     if (allowance < rewardWei) {
-      setTxStatus('tx-post', 'Step 1/2 — Approve $BLAZE in your wallet…', 'info');
+      setTxStatus('tx-post', '📝 Step 1/2 — Approve $BLAZE (sign in wallet)…', 'info');
+      // Use exact amount instead of MaxUint256 so user sees the real number in their wallet
       const approveTx = await blaze.approve(ESCROW_ADDRESS, rewardWei);
-      await approveTx.wait();
+      setTxStatus('tx-post', '⏳ Waiting for approval confirmation…', 'info');
+      await approveTx.wait(1); // wait 1 block only — faster than default
     }
-    setTxStatus('tx-post', 'Step 2/2 — Posting bounty…', 'info');
+
+    setTxStatus('tx-post', '📝 Step 2/2 — Posting bounty (sign in wallet)…', 'info');
     const tx = await escrow.postBounty(rewardWei, vodId, description, mode, deadline);
-    await tx.wait();
-    setTxStatus('tx-post', '✅ Bounty posted!', 'success');
-    toast('Bounty posted!');
-    document.getElementById('pb-reward').value = '';
-    document.getElementById('pb-description').value = '';
+    setTxStatus('tx-post', '⏳ Confirming on-chain…', 'info');
+    await tx.wait(1);
+
+    setTxStatus('tx-post', '✅ Bounty posted! Redirecting…', 'success');
+    toast('🎉 Bounty live! Clippers can now submit.');
+
+    // Reset form
+    ['pb-reward','pb-vod','pb-description'].forEach(id => {
+      const el = document.getElementById(id); if (el) el.value = '';
+    });
+    document.getElementById('pb-duration').value = '24';
+
     loadBounties();
-    setTimeout(()=>showPage('bounties'), 1200);
+    setTimeout(() => showPage('bounties'), 1000);
   } catch(e) {
-    setTxStatus('tx-post', friendlyError(e), 'error');
+    setTxStatus('tx-post', '❌ ' + friendlyError(e), 'error');
+  } finally {
+    if (btn) btn.disabled = false;
   }
 }
 
@@ -718,6 +744,15 @@ document.addEventListener('DOMContentLoaded', () => {
   loadBounties();
   if (window.ethereum?.selectedAddress) connectWallet();
   handleBlazeCallback();
+
+  // Mode card radio toggle — highlight selected card
+  document.addEventListener('change', e => {
+    if (e.target.name === 'pb-mode') {
+      document.querySelectorAll('.pb-mode-card').forEach(c => c.classList.remove('pb-mode-active'));
+      e.target.closest('.pb-mode-card')?.classList.add('pb-mode-active');
+    }
+  });
+
   setTimeout(()=>{ const s = document.getElementById('splash-screen'); if (s) { s.style.opacity='0'; setTimeout(()=>s.remove(), 500); } }, 1400);
 });
 </script>
@@ -1258,80 +1293,100 @@ textarea { resize: vertical; min-height: 76px; }
       </div>
 
       <div id="tab-post" class="tab-content" style="display:none;">
-        <div class="page-header"><h2>Post a Bounty</h2><p>Lock $BLAZE in escrow. Clippers submit clips from X.</p></div>
+        <div class="page-header"><h2>Post a Bounty</h2><p>Lock $BLAZE in escrow — clippers compete, you pick the winner.</p></div>
 
-        <div class="post-bounty-grid" style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
-          <div class="form-group" style="margin:0;">
-            <label>Reward ($BLAZE) <span style="color:var(--muted);font-size:0.7rem;">— locked in escrow</span></label>
-            <input type="number" id="pb-reward" step="1" min="1" placeholder="e.g. 500"/>
-            <div style="display:flex;gap:6px;margin-top:6px;flex-wrap:wrap;">
-              <button class="btn btn-ghost btn-sm" style="font-size:0.7rem;padding:3px 8px;" onclick="document.getElementById('pb-reward').value=100">100</button>
-              <button class="btn btn-ghost btn-sm" style="font-size:0.7rem;padding:3px 8px;" onclick="document.getElementById('pb-reward').value=500">500</button>
-              <button class="btn btn-ghost btn-sm" style="font-size:0.7rem;padding:3px 8px;" onclick="document.getElementById('pb-reward').value=1000">1K</button>
-              <button class="btn btn-ghost btn-sm" style="font-size:0.7rem;padding:3px 8px;" onclick="document.getElementById('pb-reward').value=5000">5K</button>
+        <!-- STEP 1: REWARD -->
+        <div class="pb-section">
+          <div class="pb-section-label"><span class="pb-step">1</span> Reward Amount</div>
+          <div class="pb-section-body">
+            <div style="position:relative;">
+              <input type="number" id="pb-reward" step="1" min="1" placeholder="0" style="padding-right:70px;font-size:1.1rem;font-weight:700;"/>
+              <span style="position:absolute;right:12px;top:50%;transform:translateY(-50%);font-size:0.75rem;color:var(--orange);font-weight:700;pointer-events:none;">$BLAZE</span>
             </div>
-          </div>
-          <div class="form-group" style="margin:0;">
-            <label>Submission window</label>
-            <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:6px;">
-              <button class="pb-dur-btn btn btn-ghost btn-sm" style="font-size:0.7rem;padding:3px 8px;" onclick="setPbDuration(1)">1h</button>
-              <button class="pb-dur-btn btn btn-ghost btn-sm" style="font-size:0.7rem;padding:3px 8px;" onclick="setPbDuration(6)">6h</button>
-              <button class="pb-dur-btn btn btn-ghost btn-sm" style="font-size:0.7rem;padding:3px 8px;border-color:var(--orange);color:var(--orange);" onclick="setPbDuration(24)">24h</button>
-              <button class="pb-dur-btn btn btn-ghost btn-sm" style="font-size:0.7rem;padding:3px 8px;" onclick="setPbDuration(72)">3d</button>
-              <button class="pb-dur-btn btn btn-ghost btn-sm" style="font-size:0.7rem;padding:3px 8px;" onclick="setPbDuration(168)">7d</button>
-            </div>
-            <input type="number" id="pb-duration" step="1" min="1" value="24" style="font-size:0.78rem;"/>
-          </div>
-        </div>
-
-        <div class="form-group">
-          <label>Blaze VOD / Stream reference <span style="color:var(--muted);font-size:0.7rem;">— paste the link or VOD title</span></label>
-          <input type="text" id="pb-vod" placeholder="e.g. blaze.stream/yourname or VOD title from today"/>
-        </div>
-
-        <div class="form-group">
-          <label>What should clippers capture?</label>
-          <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px;">
-            <button class="btn btn-ghost btn-sm" style="font-size:0.7rem;padding:3px 8px;" onclick="autoDesc('Best/funniest moment from my stream — post it to X to win!')">😂 Funny moment</button>
-            <button class="btn btn-ghost btn-sm" style="font-size:0.7rem;padding:3px 8px;" onclick="autoDesc('Best highlight or play from my stream — clip it and post to X!')">🎮 Best highlight</button>
-            <button class="btn btn-ghost btn-sm" style="font-size:0.7rem;padding:3px 8px;" onclick="autoDesc('Clip the most hype/hypest moment from today\'s stream and post it to X!')">🔥 Hype moment</button>
-            <button class="btn btn-ghost btn-sm" style="font-size:0.7rem;padding:3px 8px;" onclick="autoDesc('Most emotional or unexpected moment from my stream — clip and post to X!')">😮 Unexpected</button>
-          </div>
-          <textarea id="pb-description" rows="3" placeholder="Describe what you want clipped and why clippers should participate..."></textarea>
-        </div>
-
-        <div class="post-bounty-grid" style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
-          <div class="form-group" style="margin:0;">
-            <label>Resolution mode</label>
-            <div style="display:flex;flex-direction:column;gap:8px;margin-top:6px;">
-              <label class="mode-pick-label" style="display:flex;align-items:flex-start;gap:8px;padding:10px;border:1px solid var(--border);border-radius:8px;cursor:pointer;">
-                <input type="radio" name="pb-mode" value="0" checked style="margin-top:2px;flex-shrink:0;"/>
-                <div><div style="font-weight:600;font-size:0.82rem;">🎯 Streamer Picks</div><div style="font-size:0.7rem;color:var(--muted);">You choose the winner</div></div>
-              </label>
-              <label class="mode-pick-label" style="display:flex;align-items:flex-start;gap:8px;padding:10px;border:1px solid var(--border);border-radius:8px;cursor:pointer;">
-                <input type="radio" name="pb-mode" value="1" style="margin-top:2px;flex-shrink:0;"/>
-                <div><div style="font-weight:600;font-size:0.82rem;">🗳 Community Vote</div><div style="font-size:0.7rem;color:var(--muted);">Viewers vote on the best clip</div></div>
-              </label>
-            </div>
-          </div>
-          <div class="form-group" style="margin:0;">
-            <label>Max submissions <span style="color:var(--muted);font-size:0.7rem;">(optional cap)</span></label>
-            <input type="number" id="pb-maxsubs" step="1" min="1" max="200" placeholder="No cap (up to 200)"/>
-            <div style="margin-top:10px;">
-              <label style="display:flex;align-items:center;gap:8px;font-size:0.82rem;cursor:pointer;">
-                <input type="checkbox" id="pb-split-ok" checked/>
-                <div><div style="font-weight:600;font-size:0.8rem;">Allow split reward</div><div style="font-size:0.7rem;color:var(--muted);">Pick multiple winners</div></div>
-              </label>
+            <div class="pb-quick-row">
+              <span style="font-size:0.7rem;color:var(--muted);">Quick pick:</span>
+              <button class="pb-quick-btn" onclick="document.getElementById('pb-reward').value=100">100</button>
+              <button class="pb-quick-btn" onclick="document.getElementById('pb-reward').value=500">500</button>
+              <button class="pb-quick-btn" onclick="document.getElementById('pb-reward').value=1000">1,000</button>
+              <button class="pb-quick-btn" onclick="document.getElementById('pb-reward').value=5000">5,000</button>
+              <button class="pb-quick-btn" onclick="document.getElementById('pb-reward').value=10000">10K</button>
             </div>
           </div>
         </div>
 
-        <button class="btn btn-primary" style="width:100%;margin-top:8px;padding:13px;" onclick="postBounty()">
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor" style="flex-shrink:0"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
-          Post Bounty & Lock $BLAZE
-        </button>
-        <div id="tx-post" class="tx-status"></div>
-        <p style="font-size:0.7rem;color:var(--muted);margin-top:8px;">Two wallet signatures: Approve $BLAZE → Confirm bounty. The approve is only needed once if you've approved before.</p>
+        <!-- STEP 2: SOURCE VOD -->
+        <div class="pb-section">
+          <div class="pb-section-label"><span class="pb-step">2</span> Source Stream / VOD <span class="pb-optional">optional but recommended</span></div>
+          <div class="pb-section-body">
+            <input type="text" id="pb-vod" placeholder="Paste your Blaze stream link, VOD title, or leave blank for latest stream"/>
+            <p class="pb-hint">Clippers will use this to know which stream to source their clip from.</p>
+          </div>
+        </div>
+
+        <!-- STEP 3: DESCRIPTION -->
+        <div class="pb-section">
+          <div class="pb-section-label"><span class="pb-step">3</span> What do you want clipped?</div>
+          <div class="pb-section-body">
+            <div class="pb-template-row">
+              <button class="pb-template-btn" onclick="autoDesc('Clip the funniest moment from my stream and post it to X to win!')">😂 Funny</button>
+              <button class="pb-template-btn" onclick="autoDesc('Best highlight or play from my stream — clip it and post to X!')">🎮 Highlight</button>
+              <button class="pb-template-btn" onclick="autoDesc('Clip the most hype moment from today\'s stream and post to X!')">🔥 Hype</button>
+              <button class="pb-template-btn" onclick="autoDesc('Most unexpected or emotional moment from my stream — clip and post to X!')">😮 Unexpected</button>
+              <button class="pb-template-btn" onclick="autoDesc('Best IRL or reaction moment from my stream — post to X to claim the reward!')">📸 IRL/Reaction</button>
+            </div>
+            <textarea id="pb-description" rows="4" placeholder="Describe exactly what you want clipped. Be specific — the better the brief, the better the clips."></textarea>
+          </div>
+        </div>
+
+        <!-- STEP 4: DURATION -->
+        <div class="pb-section">
+          <div class="pb-section-label"><span class="pb-step">4</span> Submission Window</div>
+          <div class="pb-section-body">
+            <div class="pb-dur-row">
+              <button class="pb-dur-btn" onclick="setPbDuration(1, this)">1 hour</button>
+              <button class="pb-dur-btn" onclick="setPbDuration(6, this)">6 hours</button>
+              <button class="pb-dur-btn pb-dur-active" onclick="setPbDuration(24, this)">24 hours</button>
+              <button class="pb-dur-btn" onclick="setPbDuration(48, this)">2 days</button>
+              <button class="pb-dur-btn" onclick="setPbDuration(168, this)">7 days</button>
+            </div>
+            <div style="display:flex;align-items:center;gap:8px;margin-top:8px;">
+              <input type="number" id="pb-duration" step="1" min="1" value="24" style="width:80px;text-align:center;"/>
+              <span style="font-size:0.8rem;color:var(--muted);">hours — clippers can submit until this window closes</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- STEP 5: MODE -->
+        <div class="pb-section">
+          <div class="pb-section-label"><span class="pb-step">5</span> How is the winner chosen?</div>
+          <div class="pb-section-body" style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+            <label class="pb-mode-card pb-mode-active">
+              <input type="radio" name="pb-mode" value="0" checked style="display:none;"/>
+              <div class="pb-mode-icon">🎯</div>
+              <div class="pb-mode-title">Streamer Picks</div>
+              <div class="pb-mode-desc">You manually choose the winner after reviewing all submissions</div>
+            </label>
+            <label class="pb-mode-card">
+              <input type="radio" name="pb-mode" value="1" style="display:none;"/>
+              <div class="pb-mode-icon">🗳</div>
+              <div class="pb-mode-title">Community Vote</div>
+              <div class="pb-mode-desc">Viewers vote — highest voted clip wins when deadline passes</div>
+            </label>
+          </div>
+        </div>
+
+        <!-- SUBMIT -->
+        <div style="margin-top:6px;">
+          <button class="btn btn-primary pb-submit-btn" onclick="postBounty()">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+            Post Bounty & Lock $BLAZE
+          </button>
+          <div id="tx-post" class="tx-status" style="display:none;"></div>
+          <div class="pb-footer-note">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+            If you haven't approved $BLAZE before, you'll sign twice — first to approve, then to post. Already approved? Just one signature.
+          </div>
+        </div>
       </div>
 
       <div id="tab-profile" class="tab-content" style="display:none;">
@@ -1369,6 +1424,110 @@ textarea { resize: vertical; min-height: 76px; }
 .tx-info{background:rgba(255,255,255,0.05);color:var(--muted);display:block;}
 .tx-success{background:rgba(255,107,26,0.1);color:var(--orange);display:block;}
 .tx-error{background:rgba(232,53,10,0.1);color:var(--red);display:block;}
+
+/* ── POST BOUNTY FORM ── */
+.pb-section {
+  border:1px solid var(--border);
+  border-radius:12px;
+  margin-bottom:12px;
+  overflow:hidden;
+  transition:border-color 0.2s;
+}
+.pb-section:focus-within { border-color:rgba(255,107,26,0.5); }
+
+.pb-section-label {
+  display:flex;align-items:center;gap:8px;
+  padding:10px 14px;
+  background:rgba(255,255,255,0.03);
+  border-bottom:1px solid var(--border);
+  font-size:0.8rem;font-weight:700;
+  letter-spacing:0.01em;
+}
+.pb-step {
+  display:inline-flex;align-items:center;justify-content:center;
+  width:20px;height:20px;border-radius:50%;
+  background:linear-gradient(135deg,var(--red),var(--orange));
+  color:#fff;font-size:0.68rem;font-weight:800;flex-shrink:0;
+}
+.pb-optional { font-size:0.68rem;color:var(--muted);font-weight:400;margin-left:2px; }
+.pb-section-body { padding:12px 14px; }
+.pb-section-body input,
+.pb-section-body textarea { margin:0; }
+
+.pb-quick-row {
+  display:flex;align-items:center;gap:6px;margin-top:8px;flex-wrap:wrap;
+}
+.pb-quick-btn {
+  background:rgba(255,255,255,0.04);
+  border:1px solid var(--border);
+  color:var(--muted);
+  font-size:0.72rem;font-weight:600;
+  padding:4px 10px;border-radius:5px;cursor:pointer;
+  transition:all 0.15s;
+}
+.pb-quick-btn:hover { border-color:var(--orange);color:var(--orange);background:rgba(255,107,26,0.08); }
+
+.pb-hint { font-size:0.7rem;color:var(--muted);margin:6px 0 0;line-height:1.4; }
+
+.pb-template-row {
+  display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px;
+}
+.pb-template-btn {
+  background:rgba(255,255,255,0.04);
+  border:1px solid var(--border);
+  color:var(--text);
+  font-size:0.72rem;font-weight:500;
+  padding:5px 10px;border-radius:6px;cursor:pointer;
+  transition:all 0.15s;white-space:nowrap;
+}
+.pb-template-btn:hover { border-color:var(--orange);color:var(--orange);background:rgba(255,107,26,0.08); }
+
+.pb-dur-row {
+  display:flex;gap:6px;flex-wrap:wrap;
+}
+.pb-dur-btn {
+  background:rgba(255,255,255,0.04);
+  border:1.5px solid var(--border);
+  color:var(--muted);
+  font-size:0.75rem;font-weight:600;
+  padding:6px 12px;border-radius:6px;cursor:pointer;
+  transition:all 0.15s;
+}
+.pb-dur-btn:hover { border-color:rgba(255,107,26,0.5);color:var(--orange); }
+.pb-dur-btn.pb-dur-active { border-color:var(--orange);color:var(--orange);background:rgba(255,107,26,0.1); }
+
+.pb-mode-card {
+  display:flex;flex-direction:column;align-items:center;text-align:center;
+  padding:16px 12px;
+  border:1.5px solid var(--border);
+  border-radius:10px;cursor:pointer;
+  transition:all 0.18s;gap:6px;
+  user-select:none;
+}
+.pb-mode-card:hover { border-color:rgba(255,107,26,0.4);background:rgba(255,107,26,0.04); }
+.pb-mode-card.pb-mode-active { border-color:var(--orange);background:rgba(255,107,26,0.08); }
+.pb-mode-icon { font-size:1.6rem;line-height:1; }
+.pb-mode-title { font-weight:700;font-size:0.82rem; }
+.pb-mode-desc { font-size:0.7rem;color:var(--muted);line-height:1.4; }
+
+.pb-submit-btn {
+  width:100%;padding:14px;font-size:1rem;font-weight:700;
+  display:flex;align-items:center;justify-content:center;gap:8px;
+  margin-top:4px;
+}
+
+.pb-footer-note {
+  display:flex;align-items:flex-start;gap:6px;
+  font-size:0.7rem;color:var(--muted);
+  margin-top:10px;line-height:1.5;
+}
+.pb-footer-note svg { flex-shrink:0;margin-top:2px; }
+
+@media(max-width:480px){
+  .pb-mode-card { padding:12px 8px; }
+  .pb-mode-desc { display:none; }
+  .pb-template-row { gap:5px; }
+}
 </style>
 </body>
 </html>
