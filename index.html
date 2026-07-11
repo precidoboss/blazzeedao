@@ -64,7 +64,6 @@ let escrow = null, escrowRead = null, blaze = null, blazeRead = null;
 let blazeDecimals = 18;
 let prevPage = 'home';
 let blazeProfile = null; // { username, displayName, avatarUrl, id } — set after OAuth
-let blazeProfile = null; // { username, displayName, avatarUrl, id } — set after OAuth
 
 function initSupabase() {
   if (!db && window.supabase) db = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
@@ -232,25 +231,20 @@ async function checkBlazeStatus() {
     const resp = await fetch(`/api/blaze-status?wallet=${userAddress}`);
     const data = await resp.json();
     const badge = document.getElementById('blaze-connected-badge');
-    const btn = document.getElementById('btn-blaze');
+    const btn   = document.getElementById('btn-blaze');
     if (data.connected) {
       if (!blazeProfile) blazeProfile = { username: data.handle, avatarUrl: data.avatar };
       if (badge) {
-        badge.innerHTML = `${data.avatar ? `<img src="${escHtml(data.avatar)}" style="width:18px;height:18px;border-radius:50%;object-fit:cover;border:1px solid rgba(255,107,26,0.4);" onerror="this.style.display='none'"/>` : '<svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>'} ${escHtml(data.handle || 'Blaze')}`;
-        badge.style.display = 'inline-flex';
-      }
-      if (!blazeProfile) blazeProfile = { username: data.handle, avatarUrl: data.avatar };
-      if (badge) {
-        badge.innerHTML = `${data.avatar ? `<img src="${escHtml(data.avatar)}" style="width:18px;height:18px;border-radius:50%;object-fit:cover;border:1px solid rgba(255,107,26,0.4);" onerror="this.style.display='none'"/>` : '<svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>'} ${escHtml(data.handle || 'Blaze')}`;
+        badge.innerHTML = `${data.avatar
+          ? `<img src="${escHtml(data.avatar)}" style="width:18px;height:18px;border-radius:50%;object-fit:cover;border:1px solid rgba(255,107,26,0.4);" onerror="this.style.display='none'"/>`
+          : '<svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>'
+        } ${escHtml(data.handle || 'Blaze')}`;
         badge.style.display = 'inline-flex';
       }
       if (btn) btn.style.display = 'none';
       const pfBlaze = document.getElementById('pf-blazehandle');
       if (pfBlaze && !pfBlaze.value && data.handle) pfBlaze.value = data.handle;
-      const pfBlaze = document.getElementById('pf-blazehandle');
-      if (pfBlaze && !pfBlaze.value && data.handle) pfBlaze.value = data.handle;
     } else {
-      if (badge) badge.style.display = 'none';
       if (badge) badge.style.display = 'none';
       if (btn) btn.style.display = 'inline-flex';
     }
@@ -280,35 +274,18 @@ async function handleBlazeCallback() {
       sessionStorage.removeItem('blaze_state');
       sessionStorage.removeItem('blaze_verifier');
       sessionStorage.removeItem('clipdao_wallet');
-      // Store profile in memory — same fields hotemin uses: data.data || data
       const u = data.data || data;
       blazeProfile = { username: u.username || u.displayName, displayName: u.displayName, avatarUrl: u.avatarUrl, id: u.userId || u.id };
-      // Auto-fill profile form fields immediately
       const pfBlaze = document.getElementById('pf-blazehandle');
-      const pfUser = document.getElementById('pf-username');
+      const pfUser  = document.getElementById('pf-username');
       if (pfBlaze && blazeProfile.username) pfBlaze.value = blazeProfile.username;
       if (pfUser && !pfUser.value && blazeProfile.displayName) pfUser.value = blazeProfile.displayName;
-      // Update nav badge with avatar + username
       const badge = document.getElementById('blaze-connected-badge');
       if (badge) {
-        badge.innerHTML = `${blazeProfile.avatarUrl ? `<img src="${escHtml(blazeProfile.avatarUrl)}" style="width:18px;height:18px;border-radius:50%;object-fit:cover;" onerror="this.style.display='none'"/>` : '<svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>'} ${escHtml(blazeProfile.username || 'Blaze')}`;
-        badge.style.display = 'inline-flex';
-      }
-      const blazeBtn = document.getElementById('btn-blaze');
-      if (blazeBtn) blazeBtn.style.display = 'none';
-      toast(`🔥 Blaze connected: @${blazeProfile.username || 'account'}`, 'success');
-      // Store profile in memory — same fields hotemin uses: data.data || data
-      const u = data.data || data;
-      blazeProfile = { username: u.username || u.displayName, displayName: u.displayName, avatarUrl: u.avatarUrl, id: u.userId || u.id };
-      // Auto-fill profile form fields immediately
-      const pfBlaze = document.getElementById('pf-blazehandle');
-      const pfUser = document.getElementById('pf-username');
-      if (pfBlaze && blazeProfile.username) pfBlaze.value = blazeProfile.username;
-      if (pfUser && !pfUser.value && blazeProfile.displayName) pfUser.value = blazeProfile.displayName;
-      // Update nav badge with avatar + username
-      const badge = document.getElementById('blaze-connected-badge');
-      if (badge) {
-        badge.innerHTML = `${blazeProfile.avatarUrl ? `<img src="${escHtml(blazeProfile.avatarUrl)}" style="width:18px;height:18px;border-radius:50%;object-fit:cover;" onerror="this.style.display='none'"/>` : '<svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>'} ${escHtml(blazeProfile.username || 'Blaze')}`;
+        badge.innerHTML = `${blazeProfile.avatarUrl
+          ? `<img src="${escHtml(blazeProfile.avatarUrl)}" style="width:18px;height:18px;border-radius:50%;object-fit:cover;" onerror="this.style.display='none'"/>`
+          : '<svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>'
+        } ${escHtml(blazeProfile.username || 'Blaze')}`;
         badge.style.display = 'inline-flex';
       }
       const blazeBtn = document.getElementById('btn-blaze');
@@ -494,6 +471,7 @@ function setPbDuration(hrs, btn) {
 function autoDesc(text) {
   const el = document.getElementById('pb-description');
   if (el) { el.value = text; el.focus(); el.setSelectionRange(text.length, text.length); }
+}
 function setPbDuration(hrs, btn) {
   const el = document.getElementById('pb-duration');
   if (el) el.value = hrs;
@@ -518,7 +496,6 @@ async function postBounty() {
   const reward      = parseFloat(document.getElementById('pb-reward')?.value);
   const vodId       = document.getElementById('pb-vod')?.value.trim() || '';
   const description = document.getElementById('pb-description')?.value.trim();
-  const mode        = parseInt(document.querySelector('input[name="pb-mode"]:checked')?.value ?? '0');
   const mode        = parseInt(document.querySelector('input[name="pb-mode"]:checked')?.value ?? '0');
   const durationHrs = parseFloat(document.getElementById('pb-duration')?.value || '24');
 
@@ -550,12 +527,10 @@ async function postBounty() {
       setTxStatus('tx-post', '⏳ Waiting for approval confirmation…', 'info');
       await approveTx.wait(1); // wait 1 block only — faster than default
       setTxStatus('tx-post', '⏳ Waiting for approval confirmation…', 'info');
-      await approveTx.wait(1); // wait 1 block only — faster than default
     }
 
     setTxStatus('tx-post', '📝 Step 2/2 — Posting bounty (sign in wallet)…', 'info');
 
-    setTxStatus('tx-post', '📝 Step 2/2 — Posting bounty (sign in wallet)…', 'info');
     const tx = await escrow.postBounty(rewardWei, vodId, description, mode, deadline);
     setTxStatus('tx-post', '⏳ Confirming on-chain…', 'info');
     await tx.wait(1);
@@ -583,11 +558,7 @@ async function postBounty() {
 
     loadBounties();
     setTimeout(() => showPage('bounties'), 1000);
-    setTimeout(() => showPage('bounties'), 1000);
   } catch(e) {
-    setTxStatus('tx-post', '❌ ' + friendlyError(e), 'error');
-  } finally {
-    if (btn) btn.disabled = false;
     setTxStatus('tx-post', '❌ ' + friendlyError(e), 'error');
   } finally {
     if (btn) btn.disabled = false;
@@ -605,8 +576,6 @@ async function openBountyDetail(bountyId) {
   el.innerHTML = '<p style="color:var(--muted);">Loading…</p>';
   try {
     const reader = escrowRead || new ethers.Contract(ESCROW_ADDRESS, ESCROW_ABI, new ethers.JsonRpcProvider(FUJI_RPC));
-    const [raw, subs] = await Promise.all([reader.getBounty(bountyId), reader.getSubmissions(bountyId)]);
-    const b = { streamer:raw[0], reward:raw[1], deadline:raw[2], postedAt:raw[3], mode:raw[4], status:raw[5], vodId:raw[6], description:raw[7], submissionCount:raw[8], resolvedAt:raw[9] };
     const [raw, subs] = await Promise.all([reader.getBounty(bountyId), reader.getSubmissions(bountyId)]);
     const b = { streamer:raw[0], reward:raw[1], deadline:raw[2], postedAt:raw[3], mode:raw[4], status:raw[5], vodId:raw[6], description:raw[7], submissionCount:raw[8], resolvedAt:raw[9] };
     const reward = parseFloat(ethers.formatUnits(b.reward, blazeDecimals));
@@ -910,15 +879,6 @@ document.addEventListener('DOMContentLoaded', () => {
   loadBounties();
   if (window.ethereum?.selectedAddress) connectWallet();
   handleBlazeCallback();
-
-  // Mode card radio toggle — highlight selected card
-  document.addEventListener('change', e => {
-    if (e.target.name === 'pb-mode') {
-      document.querySelectorAll('.pb-mode-card').forEach(c => c.classList.remove('pb-mode-active'));
-      e.target.closest('.pb-mode-card')?.classList.add('pb-mode-active');
-    }
-  });
-
 
   // Mode card radio toggle — highlight selected card
   document.addEventListener('change', e => {
