@@ -1,4 +1,3 @@
-
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -382,8 +381,11 @@ async function loadBounties() {
       mode:b[4], status:b[5], vodId:b[6], description:b[7],
       submissionCount:b[8], resolvedAt:b[9]
     })).reverse();
+    const openCount = items.filter(b=>Number(b.status)===STATUS_OPEN).length;
     const statEl = document.getElementById('stat-bounties');
-    if (statEl) statEl.textContent = items.filter(b=>Number(b.status)===STATUS_OPEN).length;
+    const dashStatEl = document.getElementById('dash-open-bounties');
+    if (statEl) statEl.textContent = openCount;
+    if (dashStatEl) dashStatEl.textContent = openCount;
     // Render cards immediately with wallet address as placeholder
     const html = items.map(bountyCardHTML).join('');
     els.forEach(el=>el.innerHTML=html);
@@ -396,17 +398,18 @@ async function loadBounties() {
 
 async function enrichBountyCard(bountyId, wallet) {
   const info = await fetchStreamerProfile(wallet);
+  // Update streamer meta in all cards with this bounty id
   document.querySelectorAll(`[data-bounty-id="${bountyId}"] .streamer-meta`).forEach(el => {
     el.innerHTML = `
-      ${info.avatar ? `<img src="${escHtml(info.avatar)}" class="streamer-avatar-sm" onerror="this.style.display='none'"/>` : ''}
-      <span>${escHtml(info.handle || wallet.slice(0,6)+'…'+wallet.slice(-4))}</span>
-      ${info.isLive ? `<span class="live-dot">● LIVE</span><span style="font-size:0.65rem;color:var(--muted);">${info.viewers} viewers</span>` : ''}
-      ${info.followers ? `<span style="font-size:0.65rem;color:var(--muted);">${Number(info.followers).toLocaleString()} followers</span>` : ''}
+      ${info.avatar ? `<img src="${escHtml(info.avatar)}" class="bc-streamer-avatar" onerror="this.style.display='none'"/>` : ''}
+      <span class="bc-streamer-name">${escHtml(info.handle || wallet.slice(0,6)+'…'+wallet.slice(-4))}</span>
+      ${info.isLive ? `<span class="bc-live-inline">● LIVE</span><span style="font-size:0.63rem;color:var(--muted);">${info.viewers} viewers</span>` : ''}
+      ${info.followers ? `<span style="font-size:0.63rem;color:var(--muted);">${Number(info.followers).toLocaleString()} followers</span>` : ''}
     `;
   });
-  // Show live badge on card top
+  // Show live badge on card
   if (info.isLive) {
-    document.querySelectorAll(`[data-bounty-id="${bountyId}"] .card-live-badge`).forEach(el => {
+    document.querySelectorAll(`[data-bounty-id="${bountyId}"] .bc-live-badge`).forEach(el => {
       el.style.display = 'inline-flex';
     });
   }
@@ -419,34 +422,42 @@ function statusBadge(status) {
 }
 
 function bountyCardHTML(b) {
-  const reward   = parseFloat(ethers.formatUnits(b.reward, blazeDecimals));
-  const isCV     = Number(b.mode) === MODE_COMMUNITY_VOTE;
-  const isOpen   = Number(b.status) === STATUS_OPEN;
+  const reward      = parseFloat(ethers.formatUnits(b.reward, blazeDecimals));
+  const isCV        = Number(b.mode) === MODE_COMMUNITY_VOTE;
+  const isOpen      = Number(b.status) === STATUS_OPEN;
+  const isResolved  = Number(b.status) === STATUS_RESOLVED;
   const streamerShort = b.streamer.slice(0,6)+'…'+b.streamer.slice(-4);
+  const rewardFmt   = reward >= 1000 ? (reward/1000).toFixed(1)+'K' : reward.toLocaleString(undefined,{maximumFractionDigits:0});
+  const timeLeft    = timeRemaining(b.deadline);
+
+  let statusDot = '';
+  if (isOpen)     statusDot = '<span class="bc-dot bc-dot-open"></span>';
+  else if (isResolved) statusDot = '<span class="bc-dot bc-dot-resolved"></span>';
+  else            statusDot = '<span class="bc-dot bc-dot-cancelled"></span>';
+
   return `
-  <div class="bounty-card-v2" data-bounty-id="${b.id}" onclick="openBountyDetail(${b.id})">
-    <div class="bounty-card-top">
-      <div class="bounty-card-left">
-        <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
-          ${statusBadge(b.status)}
-          <span class="card-live-badge" style="display:none;">🔴 LIVE</span>
-          <span class="bounty-meta-tag">${isCV ? '🗳 Vote' : '🎯 Pick'}</span>
-          <span class="bounty-meta-tag">⏱ ${timeRemaining(b.deadline)}</span>
-        </div>
-        <div class="bounty-card-title">${escHtml(b.description.slice(0,90))}${b.description.length>90?'…':''}</div>
-        ${b.vodId ? `<div class="bounty-meta-tag" style="margin-top:6px;display:inline-block;">🎬 ${escHtml(b.vodId.slice(0,50))}</div>` : ''}
+  <div class="bc" data-bounty-id="${b.id}" onclick="openBountyDetail(${b.id})">
+    <div class="bc-header">
+      <div class="bc-status-row">
+        ${statusDot}
+        <span class="bc-status-text">${isOpen ? 'Open' : isResolved ? 'Resolved' : 'Cancelled'}</span>
+        <span class="bc-live-badge" style="display:none;">● LIVE</span>
+        <span class="bc-pill">${isCV ? '🗳 Vote' : '🎯 Pick'}</span>
+        <span class="bc-time">${timeLeft}</span>
       </div>
-      <div class="bounty-card-reward">
-        <img src="${BLAZE_LOGO}" class="bounty-blaze-logo" onerror="this.style.display='none'" alt=""/>
-        <div class="bounty-reward-amount">${reward >= 1000 ? (reward/1000).toFixed(1)+'K' : reward.toLocaleString(undefined,{maximumFractionDigits:0})}</div>
-        <div class="bounty-reward-label">$BLAZE</div>
+      <div class="bc-reward">
+        <img src="${BLAZE_LOGO}" class="bc-logo" onerror="this.style.display='none'" alt=""/>
+        <span class="bc-reward-num">${rewardFmt}</span>
+        <span class="bc-reward-label">$BLAZE</span>
       </div>
     </div>
-    <div class="bounty-card-footer">
+    <div class="bc-desc">${escHtml(b.description.slice(0,100))}${b.description.length>100?'…':''}</div>
+    ${b.vodId ? `<div class="bc-vod">🎬 ${escHtml(b.vodId.slice(0,60))}</div>` : ''}
+    <div class="bc-footer">
       <div class="streamer-meta">
-        <span style="font-size:0.7rem;color:var(--muted);">👤 ${escHtml(streamerShort)}</span>
+        <span class="bc-streamer-addr">👤 ${escHtml(streamerShort)}</span>
       </div>
-      <span class="bounty-sub-count">📎 ${Number(b.submissionCount)} clip${Number(b.submissionCount)!==1?'s':''}</span>
+      <span class="bc-clips">${Number(b.submissionCount)} clip${Number(b.submissionCount)!==1?'s':''}</span>
     </div>
   </div>`;
 }
@@ -454,10 +465,10 @@ function bountyCardHTML(b) {
 function filterBounties(filter, btn) {
   document.querySelectorAll('.bounty-filter-btn').forEach(b=>b.classList.remove('active'));
   if (btn) btn.classList.add('active');
-  document.querySelectorAll('#bounty-list .card').forEach(card=>{
+  document.querySelectorAll('.bc').forEach(card=>{
     if (filter === 'all') { card.style.display=''; return; }
-    const isOpen = card.querySelector('.badge-orange') !== null;
-    card.style.display = (filter === 'open' && isOpen) || (filter === 'closed' && !isOpen) ? '' : 'none';
+    const isOpen = card.querySelector('.bc-dot-open') !== null;
+    card.style.display = (filter==='open'&&isOpen)||(filter==='closed'&&!isOpen) ? '' : 'none';
   });
 }
 
@@ -805,20 +816,65 @@ async function loadDashboard() {
       </div>`;
   }
 
-  // Live stats card
+  // Stats cards
+  const showStat = (id, cardId, val) => {
+    const el = document.getElementById(id);
+    const card = document.getElementById(cardId);
+    if (el && val) { el.textContent = Number(val).toLocaleString(); if (card) card.style.display='flex'; }
+  };
+  showStat('dash-followers', 'dash-followers-card', followers);
+  showStat('dash-subs', 'dash-subs-card', subs);
+
   const liveCard = document.getElementById('dash-live-card');
   const liveViewers = document.getElementById('dash-live-viewers');
-  if (liveCard && isLive) {
-    liveCard.style.display = 'flex';
-    if (liveViewers) liveViewers.textContent = viewers.toLocaleString();
+  if (liveCard && isLive) { liveCard.style.display='flex'; if(liveViewers) liveViewers.textContent=viewers.toLocaleString(); }
+
+  // Show/hide no-blaze prompt
+  const noBlaze = document.getElementById('dash-no-blaze');
+  if (noBlaze) noBlaze.style.display = channelData?.connected ? 'none' : 'block';
+
+  // Live stream chip
+  const streamStatus = document.getElementById('dash-stream-status');
+  if (streamStatus && isLive) streamStatus.style.display = 'inline-flex';
+
+  // VODs section
+  const vodsSection = document.getElementById('dash-vods');
+  const vodsList    = document.getElementById('dash-vods-list');
+  if (vodsSection && vodsList && channelData?.vods?.length) {
+    vodsSection.style.display = 'block';
+    vodsList.innerHTML = channelData.vods.map(v => `
+      <div class="vod-row" onclick="${v.url ? `window.open('${escHtml(v.url)}','_blank')` : ''}">
+        ${v.thumbnail
+          ? `<img src="${escHtml(v.thumbnail)}" class="vod-thumb" onerror="this.style.background='rgba(255,107,26,0.08)';this.src=''" />`
+          : '<div class="vod-thumb" style="background:rgba(255,107,26,0.08);display:flex;align-items:center;justify-content:center;font-size:1.2rem;">🎬</div>'}
+        <div class="vod-info">
+          <div class="vod-title">${escHtml(v.title || 'Untitled VOD')}</div>
+          ${v.duration ? `<div class="vod-meta">${Math.floor(v.duration/3600)}h ${Math.floor((v.duration%3600)/60)}m</div>` : ''}
+        </div>
+        <button class="btn btn-ghost btn-sm" style="font-size:0.68rem;flex-shrink:0;" onclick="event.stopPropagation();document.getElementById('pb-vod').value='${escHtml(v.title||v.url||'')}';switchTab('tab-post',document.getElementById('nav-post'))">Use →</button>
+      </div>`).join('');
+  }
+
+  // Recent clips section
+  const clipsSection = document.getElementById('dash-clips');
+  const clipsList    = document.getElementById('dash-clips-list');
+  if (clipsSection && clipsList && channelData?.recentClips?.length) {
+    clipsSection.style.display = 'block';
+    clipsList.innerHTML = channelData.recentClips.map(c => `
+      <div class="vod-row" onclick="${c.url ? `window.open('${escHtml(c.url)}','_blank')` : ''}">
+        ${c.thumbnail
+          ? `<img src="${escHtml(c.thumbnail)}" class="vod-thumb" onerror="this.style.background='rgba(255,107,26,0.08)'"/>`
+          : '<div class="vod-thumb" style="background:rgba(255,107,26,0.08);display:flex;align-items:center;justify-content:center;font-size:1.2rem;">🎥</div>'}
+        <div class="vod-info">
+          <div class="vod-title">${escHtml(c.title || 'Clip')}</div>
+          ${c.views ? `<div class="vod-meta">👁 ${Number(c.views).toLocaleString()} views</div>` : ''}
+        </div>
+      </div>`).join('');
   }
 
   // Profile tab — show same card
   const pfCard = document.getElementById('pf-blaze-card');
-  if (pfCard && (avatar || handle)) {
-    pfCard.style.display = 'block';
-    pfCard.innerHTML = summaryEl?.innerHTML || '';
-  }
+  if (pfCard && (avatar || handle)) { pfCard.style.display='block'; pfCard.innerHTML = summaryEl?.innerHTML||''; }
 
   // Pre-fill profile form
   if (profile) {
@@ -830,24 +886,6 @@ async function loadDashboard() {
   } else if (handle) {
     document.getElementById('pf-blazehandle').value = handle;
     document.getElementById('pf-username').value    = name !== 'Anonymous' ? name : '';
-  }
-
-  // VODs section
-  if (channelData?.vods?.length) {
-    const vodsSection = document.getElementById('dash-vods');
-    const vodsList    = document.getElementById('dash-vods-list');
-    if (vodsSection && vodsList) {
-      vodsSection.style.display = 'block';
-      vodsList.innerHTML = channelData.vods.map(v => `
-        <div class="vod-row" onclick="${v.url ? `window.open('${escHtml(v.url)}','_blank')` : ''}">
-          ${v.thumbnail ? `<img src="${escHtml(v.thumbnail)}" class="vod-thumb" onerror="this.style.display='none'"/>` : '<div class="vod-thumb" style="background:rgba(255,107,26,0.1);display:flex;align-items:center;justify-content:center;font-size:1.4rem;">🎬</div>'}
-          <div class="vod-info">
-            <div class="vod-title">${escHtml(v.title || 'Untitled VOD')}</div>
-            ${v.duration ? `<div class="vod-meta">${Math.floor(v.duration/3600)}h ${Math.floor((v.duration%3600)/60)}m</div>` : ''}
-          </div>
-          <button class="btn btn-ghost btn-sm" onclick="event.stopPropagation();document.getElementById('pb-vod').value='${escHtml(v.url||v.title||'')}';switchTab('tab-post',document.getElementById('nav-post'))">Use for Bounty</button>
-        </div>`).join('');
-    }
   }
 
   loadMySubmissions();
@@ -1465,6 +1503,8 @@ textarea { resize: vertical; min-height: 76px; }
       <div id="dash-profile-summary" class="dash-profile-card">
         <p style="color:var(--muted);">Loading…</p>
       </div>
+
+      <!-- Stats row -->
       <div class="dash-stats-row">
         <div class="dash-stat-card">
           <img src="https://raw.githubusercontent.com/precidoboss/my-game-sprites/main/photo_1_2026-02-24_07-10-44-removebg-preview.png" style="width:22px;height:22px;object-fit:contain;" onerror="this.style.display='none'" alt=""/>
@@ -1473,25 +1513,62 @@ textarea { resize: vertical; min-height: 76px; }
             <div class="dash-stat-label">$BLAZE Balance</div>
           </div>
         </div>
+        <div class="dash-stat-card" id="dash-followers-card" style="display:none;">
+          <div style="font-size:1.3rem;">👥</div>
+          <div>
+            <div class="dash-stat-num" id="dash-followers">—</div>
+            <div class="dash-stat-label">Followers</div>
+          </div>
+        </div>
+        <div class="dash-stat-card" id="dash-subs-card" style="display:none;">
+          <div style="font-size:1.3rem;">⭐</div>
+          <div>
+            <div class="dash-stat-num" id="dash-subs">—</div>
+            <div class="dash-stat-label">Subscribers</div>
+          </div>
+        </div>
         <div class="dash-stat-card" id="dash-live-card" style="display:none;">
-          <div style="font-size:1.4rem;">🔴</div>
+          <div class="live-dot" style="font-size:1rem;">●</div>
           <div>
             <div class="dash-stat-num" id="dash-live-viewers">—</div>
             <div class="dash-stat-label">Live Viewers</div>
           </div>
         </div>
         <div class="dash-stat-card">
-          <div style="font-size:1.4rem;">🎬</div>
+          <div style="font-size:1.3rem;">🎯</div>
           <div>
             <div class="dash-stat-num" id="dash-open-bounties">—</div>
             <div class="dash-stat-label">Open Bounties</div>
           </div>
         </div>
       </div>
-      <!-- Recent VODs from Blaze -->
-      <div id="dash-vods" style="display:none;">
-        <div class="section-title" style="margin:20px 0 10px;">Recent VODs from your channel</div>
-        <div id="dash-vods-list" style="display:flex;flex-direction:column;gap:8px;"></div>
+
+      <!-- Two column layout for VODs + Clips -->
+      <div class="overview-grid">
+        <!-- Recent VODs -->
+        <div id="dash-vods" style="display:none;">
+          <div class="overview-section-header">
+            <span>🎬 Recent VODs</span>
+            <span id="dash-stream-status" class="overview-live-chip" style="display:none;">● LIVE NOW</span>
+          </div>
+          <div id="dash-vods-list" style="display:flex;flex-direction:column;gap:8px;"></div>
+        </div>
+
+        <!-- Recent Clips from Blaze -->
+        <div id="dash-clips" style="display:none;">
+          <div class="overview-section-header">🎥 Recent Clips on Blaze</div>
+          <div id="dash-clips-list" style="display:flex;flex-direction:column;gap:8px;"></div>
+        </div>
+      </div>
+
+      <!-- No Blaze connected yet message -->
+      <div id="dash-no-blaze" style="display:none;margin-top:16px;">
+        <div class="dash-cta-card">
+          <div style="font-size:2rem;margin-bottom:8px;">🔥</div>
+          <div style="font-weight:700;margin-bottom:4px;">Connect your Blaze account</div>
+          <div style="font-size:0.8rem;color:var(--muted);margin-bottom:14px;">Link your Blaze.stream account to see your channel stats, recent VODs, clips, and more right here.</div>
+          <button class="btn btn-primary btn-sm" onclick="connectBlaze()">Connect Blaze</button>
+        </div>
       </div>
     </div>
 
@@ -1872,6 +1949,125 @@ textarea { resize: vertical; min-height: 76px; }
   .profile-avatar { width:50px;height:50px; }
   .vod-thumb { width:56px;height:34px; }
   .vod-row .btn { display:none; }
+}
+
+/* ══ BOUNTY CARD (bc) — redesigned compact ══ */
+.bc {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 14px 16px;
+  cursor: pointer;
+  margin-bottom: 10px;
+  transition: border-color 0.15s, transform 0.15s, box-shadow 0.15s;
+  position: relative;
+  overflow: hidden;
+}
+.bc::after {
+  content: '';
+  position: absolute; left: 0; top: 0; bottom: 0; width: 3px;
+  background: linear-gradient(180deg, var(--red), var(--amber));
+  border-radius: 12px 0 0 12px;
+  opacity: 0; transition: opacity 0.18s;
+}
+.bc:hover { border-color: rgba(255,107,26,0.45); transform: translateY(-1px); box-shadow: 0 4px 18px rgba(0,0,0,0.22); }
+.bc:hover::after { opacity: 1; }
+
+.bc-header {
+  display: flex; justify-content: space-between; align-items: flex-start;
+  gap: 12px; margin-bottom: 8px;
+}
+.bc-status-row {
+  display: flex; align-items: center; gap: 6px; flex-wrap: wrap; flex: 1;
+}
+.bc-dot {
+  width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0;
+}
+.bc-dot-open     { background: #22D47A; box-shadow: 0 0 5px rgba(34,212,122,0.6); animation: livePulse 2s infinite; }
+.bc-dot-resolved { background: var(--muted); }
+.bc-dot-cancelled { background: var(--red); }
+.bc-status-text { font-size: 0.72rem; font-weight: 700; color: var(--muted); }
+.bc-live-badge {
+  font-size: 0.62rem; font-weight: 800; color: #E8350A;
+  background: rgba(232,53,10,0.12); border: 1px solid rgba(232,53,10,0.3);
+  padding: 1px 6px; border-radius: 4px;
+  animation: livePulse 1.5s infinite;
+}
+.bc-pill {
+  font-size: 0.65rem; font-weight: 600; color: var(--muted);
+  background: rgba(255,255,255,0.04); border: 1px solid var(--border);
+  padding: 2px 7px; border-radius: 4px;
+}
+.bc-time { font-size: 0.65rem; color: var(--muted); margin-left: auto; white-space: nowrap; }
+
+/* Reward box — right side of header */
+.bc-reward {
+  display: flex; align-items: center; gap: 5px;
+  background: rgba(255,107,26,0.08);
+  border: 1px solid rgba(255,107,26,0.2);
+  border-radius: 8px; padding: 6px 10px;
+  flex-shrink: 0; white-space: nowrap;
+}
+.bc-logo { width: 14px; height: 14px; object-fit: contain; }
+.bc-reward-num {
+  font-family: var(--font-display); font-size: 1.05rem;
+  color: var(--orange); line-height: 1;
+}
+.bc-reward-label { font-size: 0.58rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; }
+
+/* Body */
+.bc-desc {
+  font-size: 0.84rem; font-weight: 600; line-height: 1.45;
+  color: var(--text); margin-bottom: 6px;
+}
+.bc-vod {
+  font-size: 0.68rem; color: var(--muted);
+  background: rgba(255,255,255,0.03); border: 1px solid var(--border);
+  border-radius: 4px; padding: 2px 8px; display: inline-block;
+  max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  margin-bottom: 8px;
+}
+.bc-footer {
+  display: flex; justify-content: space-between; align-items: center;
+  padding-top: 8px; border-top: 1px solid rgba(255,255,255,0.04);
+  gap: 8px; flex-wrap: wrap;
+}
+.bc-streamer-avatar {
+  width: 18px; height: 18px; border-radius: 50%;
+  object-fit: cover; border: 1px solid rgba(255,107,26,0.35);
+}
+.bc-streamer-name { font-size: 0.7rem; font-weight: 600; }
+.bc-streamer-addr { font-size: 0.7rem; color: var(--muted); }
+.bc-live-inline { font-size: 0.63rem; color: #E8350A; font-weight: 700; animation: livePulse 1.5s infinite; }
+.bc-clips { font-size: 0.68rem; color: var(--muted); white-space: nowrap; }
+
+/* ══ OVERVIEW SECTIONS ══ */
+.overview-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  margin-top: 20px;
+}
+.overview-section-header {
+  font-size: 0.75rem; font-weight: 800; text-transform: uppercase;
+  letter-spacing: 0.07em; color: var(--muted);
+  margin-bottom: 10px;
+  display: flex; align-items: center; gap: 8px;
+}
+.overview-live-chip {
+  font-size: 0.6rem; font-weight: 800; color: #E8350A;
+  background: rgba(232,53,10,0.12); border: 1px solid rgba(232,53,10,0.3);
+  padding: 2px 7px; border-radius: 4px;
+  animation: livePulse 1.5s infinite;
+}
+.dash-cta-card {
+  background: rgba(255,107,26,0.06);
+  border: 1px dashed rgba(255,107,26,0.3);
+  border-radius: 14px; padding: 28px; text-align: center;
+}
+@media(max-width:640px){
+  .overview-grid { grid-template-columns: 1fr; }
+  .bc-time { display: none; }
 }
 </style>
 </body>
