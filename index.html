@@ -1,3 +1,4 @@
+
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -763,53 +764,102 @@ function goBackFromBounty() { showPage(prevPage || 'bounties'); }
 async function loadDashboard() {
   if (!userAddress) { showPage('home'); toast('Connect your wallet first', 'error'); return; }
   refreshBlazeBalance();
+
   const [profile, channelData] = await Promise.all([
     loadProfile(),
     fetch(`/api/blaze/channel?wallet=${userAddress}`).then(r=>r.json()).catch(()=>null)
   ]);
-  const el = document.getElementById('dash-profile-summary');
-  if (el) {
-    const avatar    = profile?.blaze_avatar || null;
-    const name      = profile?.username || profile?.blaze_handle || 'Anonymous';
-    const handle    = profile?.blaze_handle || null;
-    const role      = profile?.role || 'clipper';
-    const isLive    = channelData?.live?.isLive || false;
-    const viewers   = channelData?.live?.viewers || 0;
-    const followers = channelData?.stats?.followers || 0;
-    const subs      = channelData?.stats?.subscribers || 0;
-    el.innerHTML = `
-      <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;">
+
+  const avatar    = channelData?.avatarUrl   || profile?.blaze_avatar || null;
+  const name      = channelData?.displayName || profile?.username || profile?.blaze_handle || 'Anonymous';
+  const handle    = channelData?.username    || profile?.blaze_handle || null;
+  const role      = profile?.role || 'clipper';
+  const isLive    = channelData?.live?.isLive || false;
+  const viewers   = channelData?.live?.viewers || 0;
+  const liveTitle = channelData?.live?.title || '';
+  const followers = channelData?.stats?.followers || 0;
+  const subs      = channelData?.stats?.subscribers || 0;
+
+  // Overview profile card
+  const summaryEl = document.getElementById('dash-profile-summary');
+  if (summaryEl) {
+    summaryEl.innerHTML = `
+      <div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap;">
         <div style="position:relative;flex-shrink:0;">
           ${avatar
-            ? `<img src="${escHtml(avatar)}" style="width:60px;height:60px;border-radius:50%;border:2px solid var(--orange);object-fit:cover;" onerror="this.style.display='none'"/>`
-            : `<div style="width:60px;height:60px;border-radius:50%;background:rgba(255,107,26,0.12);border:2px solid var(--orange);display:flex;align-items:center;justify-content:center;font-size:1.6rem;">🎬</div>`}
-          ${isLive ? `<span style="position:absolute;bottom:0;right:0;background:#E8350A;color:#fff;font-size:0.55rem;font-weight:800;padding:2px 5px;border-radius:4px;border:1.5px solid var(--card);">LIVE</span>` : ''}
+            ? `<img src="${escHtml(avatar)}" class="profile-avatar" onerror="this.style.background='rgba(255,107,26,0.12)'"/>`
+            : `<div class="profile-avatar" style="display:flex;align-items:center;justify-content:center;font-size:2rem;background:rgba(255,107,26,0.12);">🎬</div>`}
+          ${isLive ? `<span class="live-overlay-badge">LIVE</span>` : ''}
         </div>
-        <div style="flex:1;min-width:160px;">
-          <div style="font-weight:800;font-size:1.05rem;margin-bottom:3px;">${escHtml(name)}</div>
-          ${handle ? `<div style="font-size:0.75rem;color:var(--orange);margin-bottom:6px;">🔥 @${escHtml(handle)} on Blaze</div>` : ''}
-          <div style="display:flex;gap:10px;flex-wrap:wrap;">
-            <span style="padding:2px 8px;background:rgba(255,107,26,0.1);border:1px solid rgba(255,107,26,0.3);border-radius:4px;font-size:0.68rem;text-transform:uppercase;color:var(--orange);font-weight:700;">${escHtml(role)}</span>
-            ${followers ? `<span style="font-size:0.72rem;color:var(--muted);">👥 ${Number(followers).toLocaleString()} followers</span>` : ''}
-            ${subs ? `<span style="font-size:0.72rem;color:var(--muted);">⭐ ${Number(subs).toLocaleString()} subs</span>` : ''}
-            ${isLive ? `<span style="font-size:0.72rem;color:#E8350A;font-weight:700;">● LIVE · ${viewers} viewers</span>` : ''}
+        <div style="flex:1;min-width:180px;">
+          <div class="profile-name">${escHtml(name)}</div>
+          ${handle ? `<div class="profile-blaze-handle">🔥 @${escHtml(handle)} on Blaze</div>` : ''}
+          <div class="profile-stats-row">
+            <span class="profile-role-badge">${escHtml(role)}</span>
+            ${followers ? `<span class="profile-stat">👥 ${Number(followers).toLocaleString()}</span>` : ''}
+            ${subs ? `<span class="profile-stat">⭐ ${Number(subs).toLocaleString()} subs</span>` : ''}
+            ${isLive ? `<span class="profile-stat live-stat">● LIVE · ${viewers} viewers</span>` : ''}
           </div>
+          ${isLive && liveTitle ? `<div style="font-size:0.75rem;color:var(--muted);margin-top:4px;">🎮 ${escHtml(liveTitle)}</div>` : ''}
         </div>
       </div>`;
   }
+
+  // Live stats card
+  const liveCard = document.getElementById('dash-live-card');
+  const liveViewers = document.getElementById('dash-live-viewers');
+  if (liveCard && isLive) {
+    liveCard.style.display = 'flex';
+    if (liveViewers) liveViewers.textContent = viewers.toLocaleString();
+  }
+
+  // Profile tab — show same card
+  const pfCard = document.getElementById('pf-blaze-card');
+  if (pfCard && (avatar || handle)) {
+    pfCard.style.display = 'block';
+    pfCard.innerHTML = summaryEl?.innerHTML || '';
+  }
+
+  // Pre-fill profile form
   if (profile) {
-    document.getElementById('pf-username').value      = profile.username || '';
-    document.getElementById('pf-xhandle').value       = profile.x_handle || '';
-    document.getElementById('pf-blazehandle').value   = profile.blaze_handle || '';
+    document.getElementById('pf-username').value    = profile.username || '';
+    document.getElementById('pf-xhandle').value     = profile.x_handle || '';
+    document.getElementById('pf-blazehandle').value = profile.blaze_handle || handle || '';
     const roleInput = document.querySelector(`input[name="pf-role"][value="${profile.role}"]`);
     if (roleInput) roleInput.checked = true;
+  } else if (handle) {
+    document.getElementById('pf-blazehandle').value = handle;
+    document.getElementById('pf-username').value    = name !== 'Anonymous' ? name : '';
   }
-  // If no profile yet but we have blaze data from memory, pre-fill the form
-  if (!profile && blazeProfile?.username) {
-    document.getElementById('pf-blazehandle').value = blazeProfile.username;
-    document.getElementById('pf-username').value     = blazeProfile.displayName || blazeProfile.username;
+
+  // VODs section
+  if (channelData?.vods?.length) {
+    const vodsSection = document.getElementById('dash-vods');
+    const vodsList    = document.getElementById('dash-vods-list');
+    if (vodsSection && vodsList) {
+      vodsSection.style.display = 'block';
+      vodsList.innerHTML = channelData.vods.map(v => `
+        <div class="vod-row" onclick="${v.url ? `window.open('${escHtml(v.url)}','_blank')` : ''}">
+          ${v.thumbnail ? `<img src="${escHtml(v.thumbnail)}" class="vod-thumb" onerror="this.style.display='none'"/>` : '<div class="vod-thumb" style="background:rgba(255,107,26,0.1);display:flex;align-items:center;justify-content:center;font-size:1.4rem;">🎬</div>'}
+          <div class="vod-info">
+            <div class="vod-title">${escHtml(v.title || 'Untitled VOD')}</div>
+            ${v.duration ? `<div class="vod-meta">${Math.floor(v.duration/3600)}h ${Math.floor((v.duration%3600)/60)}m</div>` : ''}
+          </div>
+          <button class="btn btn-ghost btn-sm" onclick="event.stopPropagation();document.getElementById('pb-vod').value='${escHtml(v.url||v.title||'')}';switchTab('tab-post',document.getElementById('nav-post'))">Use for Bounty</button>
+        </div>`).join('');
+    }
   }
+
   loadMySubmissions();
+}
+
+function loadProfileTab() {
+  const pfCard = document.getElementById('pf-blaze-card');
+  const summaryEl = document.getElementById('dash-profile-summary');
+  if (pfCard && summaryEl && summaryEl.innerHTML.includes('profile-avatar')) {
+    pfCard.style.display = 'block';
+    pfCard.innerHTML = summaryEl.innerHTML;
+  }
 }
 
 async function loadMySubmissions() {
@@ -847,16 +897,19 @@ function showPage(page) {
   if (page === 'bounties') loadBounties();
 }
 
-function switchTab(tabId) {
+function switchTab(tabId, clickedEl) {
   document.querySelectorAll('.tab-content').forEach(t => t.style.display = 'none');
-  document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+  document.querySelectorAll('.dash-tab').forEach(t => t.classList.remove('active'));
   const el = document.getElementById(tabId);
   if (el) el.style.display = 'block';
-  const navMap = { 'tab-overview':'nav-overview','tab-bounties-dash':'nav-bounties-dash','tab-submissions':'nav-submissions','tab-post':'nav-post','tab-profile':'nav-profile' };
-  const navEl = document.getElementById(navMap[tabId]);
-  if (navEl) navEl.classList.add('active');
+  if (clickedEl) clickedEl.classList.add('active');
+  else {
+    const navMap = { 'tab-overview':'nav-overview','tab-bounties-dash':'nav-bounties-dash','tab-submissions':'nav-submissions','tab-post':'nav-post','tab-profile':'nav-profile' };
+    document.getElementById(navMap[tabId])?.classList.add('active');
+  }
   if (tabId === 'tab-bounties-dash') loadBounties();
   if (tabId === 'tab-submissions') loadMySubmissions();
+  if (tabId === 'tab-profile') loadProfileTab();
 }
 
 function setMobileActive(btnId) {
@@ -871,7 +924,7 @@ document.addEventListener('click', e => {
 const exposed = { connectWallet, disconnectWallet, showPage, switchTab, postBounty, submitClip, voteSubmission,
   confirmPickWinner, resolveCommunityVote, claimReward, cancelBounty, filterBounties, openBountyDetail,
   goBackFromBounty, setMobileActive, saveProfile, renderWinnerAmountInputs, autoDesc, setPbDuration,
-  fetchStreamerProfile, enrichBountyCard };
+  fetchStreamerProfile, enrichBountyCard, loadProfileTab };
 Object.assign(window, exposed);
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -1394,253 +1447,187 @@ textarea { resize: vertical; min-height: 76px; }
   </div>
 </div>
 
-<!-- ==================== PAGE: DASHBOARD ==================== -->
+<!-- ==================== PAGE: DASHBOARD ====================-->
 <div id="page-dashboard" class="page">
-  <div class="container" style="display:flex;gap:24px;flex-wrap:wrap;">
-    <div style="min-width:180px;">
-      <div class="nav-item active" onclick="switchTab('tab-overview')" id="nav-overview"><span class="icon">⚡</span> Overview</div>
-      <div class="nav-item" onclick="switchTab('tab-bounties-dash')" id="nav-bounties-dash"><span class="icon">🎯</span> Bounty Board</div>
-      <div class="nav-item" onclick="switchTab('tab-submissions')" id="nav-submissions"><span class="icon">📎</span> My Submissions</div>
-      <div class="nav-item" onclick="switchTab('tab-post')" id="nav-post"><span class="icon">➕</span> Post Bounty</div>
-      <div class="nav-item" onclick="switchTab('tab-profile')" id="nav-profile"><span class="icon">👤</span> Profile</div>
-    </div>
-    <div style="flex:1;min-width:280px;">
-      <div id="tab-overview" class="tab-content" style="display:block;">
-        <div class="page-header"><h2>Overview</h2></div>
-        <div class="card" id="dash-profile-summary" style="margin-bottom:16px;"><p style="color:var(--muted);">Loading…</p></div>
-        <div class="card">
-          <div style="display:flex;align-items:center;gap:6px;font-family:var(--font-display);font-size:1.6rem;color:var(--orange);">
-            <img src="https://raw.githubusercontent.com/precidoboss/my-game-sprites/main/photo_1_2026-02-24_07-10-44-removebg-preview.png" style="width:20px;height:20px;object-fit:contain;" onerror="this.style.display='none'"/>
-            <span id="blaze-balance-dash">—</span>
-          </div>
-          <div style="font-size:0.72rem;color:var(--muted);text-transform:uppercase;">Your $BLAZE Balance</div>
-        </div>
+  <!-- Hotemin-style horizontal tab bar at top -->
+  <div class="dash-tabbar">
+    <div class="dash-tab active" id="nav-overview"      onclick="switchTab('tab-overview',this)">⚡ Overview</div>
+    <div class="dash-tab"        id="nav-bounties-dash"  onclick="switchTab('tab-bounties-dash',this)">🎯 Bounties</div>
+    <div class="dash-tab"        id="nav-submissions"    onclick="switchTab('tab-submissions',this)">📎 My Clips</div>
+    <div class="dash-tab"        id="nav-post"           onclick="switchTab('tab-post',this)">➕ Post</div>
+    <div class="dash-tab"        id="nav-profile"        onclick="switchTab('tab-profile',this)">👤 Profile</div>
+  </div>
+
+  <div class="dash-body container">
+
+    <!-- OVERVIEW -->
+    <div id="tab-overview" class="tab-content" style="display:block;">
+      <div id="dash-profile-summary" class="dash-profile-card">
+        <p style="color:var(--muted);">Loading…</p>
       </div>
-
-      <div id="tab-bounties-dash" class="tab-content" style="display:none;">
-        <div class="page-header"><h2>Bounty Board</h2></div>
-        <div id="bounty-list-dash-placeholder"></div>
-      </div>
-
-      <div id="tab-submissions" class="tab-content" style="display:none;">
-        <div class="page-header"><h2>My Submissions</h2><p>Track your clip submissions and claimable rewards.</p></div>
-        <div id="my-submissions-list"></div>
-      </div>
-
-      <div id="tab-post" class="tab-content" style="display:none;">
-        <div class="page-header"><h2>Post a Bounty</h2><p>Lock $BLAZE in escrow — clippers compete, you pick the winner.</p></div>
-
-        <!-- STEP 1: REWARD -->
-        <div class="pb-section">
-          <div class="pb-section-label"><span class="pb-step">1</span> Reward Amount</div>
-          <div class="pb-section-body">
-            <div style="position:relative;">
-              <input type="number" id="pb-reward" step="1" min="1" placeholder="0" style="padding-right:70px;font-size:1.1rem;font-weight:700;"/>
-              <span style="position:absolute;right:12px;top:50%;transform:translateY(-50%);font-size:0.75rem;color:var(--orange);font-weight:700;pointer-events:none;">$BLAZE</span>
-            </div>
-            <div class="pb-quick-row">
-              <span style="font-size:0.7rem;color:var(--muted);">Quick pick:</span>
-              <button class="pb-quick-btn" onclick="document.getElementById('pb-reward').value=100">100</button>
-              <button class="pb-quick-btn" onclick="document.getElementById('pb-reward').value=500">500</button>
-              <button class="pb-quick-btn" onclick="document.getElementById('pb-reward').value=1000">1,000</button>
-              <button class="pb-quick-btn" onclick="document.getElementById('pb-reward').value=5000">5,000</button>
-              <button class="pb-quick-btn" onclick="document.getElementById('pb-reward').value=10000">10K</button>
-            </div>
+      <div class="dash-stats-row">
+        <div class="dash-stat-card">
+          <img src="https://raw.githubusercontent.com/precidoboss/my-game-sprites/main/photo_1_2026-02-24_07-10-44-removebg-preview.png" style="width:22px;height:22px;object-fit:contain;" onerror="this.style.display='none'" alt=""/>
+          <div>
+            <div class="dash-stat-num" id="blaze-balance-dash">—</div>
+            <div class="dash-stat-label">$BLAZE Balance</div>
           </div>
         </div>
-
-        <!-- STEP 2: SOURCE VOD -->
-        <div class="pb-section">
-          <div class="pb-section-label"><span class="pb-step">2</span> Source Stream / VOD <span class="pb-optional">optional but recommended</span></div>
-          <div class="pb-section-body">
-            <input type="text" id="pb-vod" placeholder="Paste your Blaze stream link, VOD title, or leave blank for latest stream"/>
-            <p class="pb-hint">Clippers will use this to know which stream to source their clip from.</p>
-          </div>
-        <div class="page-header"><h2>Post a Bounty</h2><p>Lock $BLAZE in escrow — clippers compete, you pick the winner.</p></div>
-
-        <!-- STEP 1: REWARD -->
-        <div class="pb-section">
-          <div class="pb-section-label"><span class="pb-step">1</span> Reward Amount</div>
-          <div class="pb-section-body">
-            <div style="position:relative;">
-              <input type="number" id="pb-reward" step="1" min="1" placeholder="0" style="padding-right:70px;font-size:1.1rem;font-weight:700;"/>
-              <span style="position:absolute;right:12px;top:50%;transform:translateY(-50%);font-size:0.75rem;color:var(--orange);font-weight:700;pointer-events:none;">$BLAZE</span>
-            </div>
-            <div class="pb-quick-row">
-              <span style="font-size:0.7rem;color:var(--muted);">Quick pick:</span>
-              <button class="pb-quick-btn" onclick="document.getElementById('pb-reward').value=100">100</button>
-              <button class="pb-quick-btn" onclick="document.getElementById('pb-reward').value=500">500</button>
-              <button class="pb-quick-btn" onclick="document.getElementById('pb-reward').value=1000">1,000</button>
-              <button class="pb-quick-btn" onclick="document.getElementById('pb-reward').value=5000">5,000</button>
-              <button class="pb-quick-btn" onclick="document.getElementById('pb-reward').value=10000">10K</button>
-            </div>
+        <div class="dash-stat-card" id="dash-live-card" style="display:none;">
+          <div style="font-size:1.4rem;">🔴</div>
+          <div>
+            <div class="dash-stat-num" id="dash-live-viewers">—</div>
+            <div class="dash-stat-label">Live Viewers</div>
           </div>
         </div>
-
-        <!-- STEP 2: SOURCE VOD -->
-        <div class="pb-section">
-          <div class="pb-section-label"><span class="pb-step">2</span> Source Stream / VOD <span class="pb-optional">optional but recommended</span></div>
-          <div class="pb-section-body">
-            <input type="text" id="pb-vod" placeholder="Paste your Blaze stream link, VOD title, or leave blank for latest stream"/>
-            <p class="pb-hint">Clippers will use this to know which stream to source their clip from.</p>
-          </div>
-        </div>
-
-        <!-- STEP 3: DESCRIPTION -->
-        <div class="pb-section">
-          <div class="pb-section-label"><span class="pb-step">3</span> What do you want clipped?</div>
-          <div class="pb-section-body">
-            <div class="pb-template-row">
-              <button class="pb-template-btn" onclick="autoDesc('Clip the funniest moment from my stream and post it to X to win!')">😂 Funny</button>
-              <button class="pb-template-btn" onclick="autoDesc('Best highlight or play from my stream — clip it and post to X!')">🎮 Highlight</button>
-              <button class="pb-template-btn" onclick="autoDesc('Clip the most hype moment from today\'s stream and post to X!')">🔥 Hype</button>
-              <button class="pb-template-btn" onclick="autoDesc('Most unexpected or emotional moment from my stream — clip and post to X!')">😮 Unexpected</button>
-              <button class="pb-template-btn" onclick="autoDesc('Best IRL or reaction moment from my stream — post to X to claim the reward!')">📸 IRL/Reaction</button>
-            </div>
-            <textarea id="pb-description" rows="4" placeholder="Describe exactly what you want clipped. Be specific — the better the brief, the better the clips."></textarea>
-          </div>
-        </div>
-
-        <!-- STEP 4: DURATION -->
-        <div class="pb-section">
-          <div class="pb-section-label"><span class="pb-step">4</span> Submission Window</div>
-          <div class="pb-section-body">
-            <div class="pb-dur-row">
-              <button class="pb-dur-btn" onclick="setPbDuration(1, this)">1 hour</button>
-              <button class="pb-dur-btn" onclick="setPbDuration(6, this)">6 hours</button>
-              <button class="pb-dur-btn pb-dur-active" onclick="setPbDuration(24, this)">24 hours</button>
-              <button class="pb-dur-btn" onclick="setPbDuration(48, this)">2 days</button>
-              <button class="pb-dur-btn" onclick="setPbDuration(168, this)">7 days</button>
-            </div>
-            <div style="display:flex;align-items:center;gap:8px;margin-top:8px;">
-              <input type="number" id="pb-duration" step="1" min="1" value="24" style="width:80px;text-align:center;"/>
-              <span style="font-size:0.8rem;color:var(--muted);">hours — clippers can submit until this window closes</span>
-            </div>
-          </div>
-        </div>
-
-        <!-- STEP 5: MODE -->
-        <div class="pb-section">
-          <div class="pb-section-label"><span class="pb-step">5</span> How is the winner chosen?</div>
-          <div class="pb-section-body" style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
-            <label class="pb-mode-card pb-mode-active">
-              <input type="radio" name="pb-mode" value="0" checked style="display:none;"/>
-              <div class="pb-mode-icon">🎯</div>
-              <div class="pb-mode-title">Streamer Picks</div>
-              <div class="pb-mode-desc">You manually choose the winner after reviewing all submissions</div>
-            </label>
-            <label class="pb-mode-card">
-              <input type="radio" name="pb-mode" value="1" style="display:none;"/>
-              <div class="pb-mode-icon">🗳</div>
-              <div class="pb-mode-title">Community Vote</div>
-              <div class="pb-mode-desc">Viewers vote — highest voted clip wins when deadline passes</div>
-            </label>
-          </div>
-        </div>
-
-        <!-- SUBMIT -->
-        <div style="margin-top:6px;">
-          <button class="btn btn-primary pb-submit-btn" onclick="postBounty()">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
-            Post Bounty & Lock $BLAZE
-          </button>
-          <div id="tx-post" class="tx-status" style="display:none;"></div>
-          <div class="pb-footer-note">
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
-            If you haven't approved $BLAZE before, you'll sign twice — first to approve, then to post. Already approved? Just one signature.
-          </div>
-        </div>
-
-        <!-- STEP 3: DESCRIPTION -->
-        <div class="pb-section">
-          <div class="pb-section-label"><span class="pb-step">3</span> What do you want clipped?</div>
-          <div class="pb-section-body">
-            <div class="pb-template-row">
-              <button class="pb-template-btn" onclick="autoDesc('Clip the funniest moment from my stream and post it to X to win!')">😂 Funny</button>
-              <button class="pb-template-btn" onclick="autoDesc('Best highlight or play from my stream — clip it and post to X!')">🎮 Highlight</button>
-              <button class="pb-template-btn" onclick="autoDesc('Clip the most hype moment from today\'s stream and post to X!')">🔥 Hype</button>
-              <button class="pb-template-btn" onclick="autoDesc('Most unexpected or emotional moment from my stream — clip and post to X!')">😮 Unexpected</button>
-              <button class="pb-template-btn" onclick="autoDesc('Best IRL or reaction moment from my stream — post to X to claim the reward!')">📸 IRL/Reaction</button>
-            </div>
-            <textarea id="pb-description" rows="4" placeholder="Describe exactly what you want clipped. Be specific — the better the brief, the better the clips."></textarea>
-          </div>
-        </div>
-
-        <!-- STEP 4: DURATION -->
-        <div class="pb-section">
-          <div class="pb-section-label"><span class="pb-step">4</span> Submission Window</div>
-          <div class="pb-section-body">
-            <div class="pb-dur-row">
-              <button class="pb-dur-btn" onclick="setPbDuration(1, this)">1 hour</button>
-              <button class="pb-dur-btn" onclick="setPbDuration(6, this)">6 hours</button>
-              <button class="pb-dur-btn pb-dur-active" onclick="setPbDuration(24, this)">24 hours</button>
-              <button class="pb-dur-btn" onclick="setPbDuration(48, this)">2 days</button>
-              <button class="pb-dur-btn" onclick="setPbDuration(168, this)">7 days</button>
-            </div>
-            <div style="display:flex;align-items:center;gap:8px;margin-top:8px;">
-              <input type="number" id="pb-duration" step="1" min="1" value="24" style="width:80px;text-align:center;"/>
-              <span style="font-size:0.8rem;color:var(--muted);">hours — clippers can submit until this window closes</span>
-            </div>
-          </div>
-        </div>
-
-        <!-- STEP 5: MODE -->
-        <div class="pb-section">
-          <div class="pb-section-label"><span class="pb-step">5</span> How is the winner chosen?</div>
-          <div class="pb-section-body" style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
-            <label class="pb-mode-card pb-mode-active">
-              <input type="radio" name="pb-mode" value="0" checked style="display:none;"/>
-              <div class="pb-mode-icon">🎯</div>
-              <div class="pb-mode-title">Streamer Picks</div>
-              <div class="pb-mode-desc">You manually choose the winner after reviewing all submissions</div>
-            </label>
-            <label class="pb-mode-card">
-              <input type="radio" name="pb-mode" value="1" style="display:none;"/>
-              <div class="pb-mode-icon">🗳</div>
-              <div class="pb-mode-title">Community Vote</div>
-              <div class="pb-mode-desc">Viewers vote — highest voted clip wins when deadline passes</div>
-            </label>
-          </div>
-        </div>
-
-        <!-- SUBMIT -->
-        <div style="margin-top:6px;">
-          <button class="btn btn-primary pb-submit-btn" onclick="postBounty()">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
-            Post Bounty & Lock $BLAZE
-          </button>
-          <div id="tx-post" class="tx-status" style="display:none;"></div>
-          <div class="pb-footer-note">
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
-            If you haven't approved $BLAZE before, you'll sign twice — first to approve, then to post. Already approved? Just one signature.
+        <div class="dash-stat-card">
+          <div style="font-size:1.4rem;">🎬</div>
+          <div>
+            <div class="dash-stat-num" id="dash-open-bounties">—</div>
+            <div class="dash-stat-label">Open Bounties</div>
           </div>
         </div>
       </div>
-
-      <div id="tab-profile" class="tab-content" style="display:none;">
-        <div class="page-header"><h2>My Profile</h2><p>No NFTs — just your Blaze + X identity, stored off-chain.</p></div>
-        <div class="form-group">
-          <label>Display username</label>
-          <input type="text" id="pf-username" placeholder="yourname"/>
-        </div>
-        <div class="form-group">
-          <label>X (Twitter) handle</label>
-          <input type="text" id="pf-xhandle" placeholder="yourhandle"/>
-        </div>
-        <div class="form-group">
-          <label>Blaze handle (optional)</label>
-          <input type="text" id="pf-blazehandle" placeholder="yourblazehandle"/>
-        </div>
-        <div class="form-group">
-          <label>I am a...</label>
-          <div style="display:flex;gap:16px;">
-            <label style="display:flex;align-items:center;gap:6px;font-size:0.85rem;"><input type="radio" name="pf-role" value="clipper" checked/> Clipper</label>
-            <label style="display:flex;align-items:center;gap:6px;font-size:0.85rem;"><input type="radio" name="pf-role" value="streamer"/> Streamer</label>
-          </div>
-        </div>
-        <button class="btn btn-primary" style="width:100%;" onclick="saveProfile()">💾 Save Profile</button>
+      <!-- Recent VODs from Blaze -->
+      <div id="dash-vods" style="display:none;">
+        <div class="section-title" style="margin:20px 0 10px;">Recent VODs from your channel</div>
+        <div id="dash-vods-list" style="display:flex;flex-direction:column;gap:8px;"></div>
       </div>
     </div>
+
+    <!-- BOUNTY BOARD -->
+    <div id="tab-bounties-dash" class="tab-content" style="display:none;">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;flex-wrap:wrap;gap:8px;">
+        <h2 style="font-family:var(--font-display);font-size:1.4rem;">Bounty Board</h2>
+        <button class="btn btn-primary btn-sm" onclick="switchTab('tab-post',document.getElementById('nav-post'))">➕ Post a Bounty</button>
+      </div>
+      <div id="bounty-list-dash-placeholder"></div>
+    </div>
+
+    <!-- MY SUBMISSIONS -->
+    <div id="tab-submissions" class="tab-content" style="display:none;">
+      <div class="page-header"><h2>My Clips</h2><p>All clips you've submitted, and any unclaimed rewards.</p></div>
+      <div id="my-submissions-list"></div>
+    </div>
+
+    <!-- POST BOUNTY -->
+    <div id="tab-post" class="tab-content" style="display:none;">
+      <div class="page-header"><h2>Post a Bounty</h2><p>Lock $BLAZE in escrow — clippers compete, you pick the winner.</p></div>
+
+      <div class="pb-section">
+        <div class="pb-section-label"><span class="pb-step">1</span> Reward Amount</div>
+        <div class="pb-section-body">
+          <div style="position:relative;">
+            <input type="number" id="pb-reward" step="1" min="1" placeholder="0" style="padding-right:70px;font-size:1.1rem;font-weight:700;"/>
+            <span style="position:absolute;right:12px;top:50%;transform:translateY(-50%);font-size:0.75rem;color:var(--orange);font-weight:700;pointer-events:none;">$BLAZE</span>
+          </div>
+          <div class="pb-quick-row">
+            <span style="font-size:0.7rem;color:var(--muted);">Quick pick:</span>
+            <button class="pb-quick-btn" onclick="document.getElementById('pb-reward').value=100">100</button>
+            <button class="pb-quick-btn" onclick="document.getElementById('pb-reward').value=500">500</button>
+            <button class="pb-quick-btn" onclick="document.getElementById('pb-reward').value=1000">1,000</button>
+            <button class="pb-quick-btn" onclick="document.getElementById('pb-reward').value=5000">5,000</button>
+            <button class="pb-quick-btn" onclick="document.getElementById('pb-reward').value=10000">10K</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="pb-section">
+        <div class="pb-section-label"><span class="pb-step">2</span> Source Stream / VOD <span class="pb-optional">optional but recommended</span></div>
+        <div class="pb-section-body">
+          <input type="text" id="pb-vod" placeholder="Paste your Blaze stream link, VOD title, or leave blank for latest stream"/>
+          <p class="pb-hint">Clippers will use this to know which stream to source their clip from.</p>
+        </div>
+      </div>
+
+      <div class="pb-section">
+        <div class="pb-section-label"><span class="pb-step">3</span> What do you want clipped?</div>
+        <div class="pb-section-body">
+          <div class="pb-template-row">
+            <button class="pb-template-btn" onclick="autoDesc('Clip the funniest moment from my stream and post it to X to win!')">😂 Funny</button>
+            <button class="pb-template-btn" onclick="autoDesc('Best highlight or play from my stream — clip it and post to X!')">🎮 Highlight</button>
+            <button class="pb-template-btn" onclick="autoDesc(&quot;Clip the most hype moment from today's stream and post to X!&quot;)">🔥 Hype</button>
+            <button class="pb-template-btn" onclick="autoDesc('Most unexpected or emotional moment from my stream — clip and post to X!')">😮 Unexpected</button>
+            <button class="pb-template-btn" onclick="autoDesc('Best IRL or reaction moment from my stream — post to X to claim the reward!')">📸 IRL</button>
+          </div>
+          <textarea id="pb-description" rows="4" placeholder="Describe exactly what you want clipped. Be specific — the better the brief, the better the clips."></textarea>
+        </div>
+      </div>
+
+      <div class="pb-section">
+        <div class="pb-section-label"><span class="pb-step">4</span> Submission Window</div>
+        <div class="pb-section-body">
+          <div class="pb-dur-row">
+            <button class="pb-dur-btn" onclick="setPbDuration(1, this)">1 hour</button>
+            <button class="pb-dur-btn" onclick="setPbDuration(6, this)">6 hours</button>
+            <button class="pb-dur-btn pb-dur-active" onclick="setPbDuration(24, this)">24 hours</button>
+            <button class="pb-dur-btn" onclick="setPbDuration(48, this)">2 days</button>
+            <button class="pb-dur-btn" onclick="setPbDuration(168, this)">7 days</button>
+          </div>
+          <div style="display:flex;align-items:center;gap:8px;margin-top:8px;">
+            <input type="number" id="pb-duration" step="1" min="1" value="24" style="width:80px;text-align:center;"/>
+            <span style="font-size:0.8rem;color:var(--muted);">hours total</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="pb-section">
+        <div class="pb-section-label"><span class="pb-step">5</span> How is the winner chosen?</div>
+        <div class="pb-section-body" style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+          <label class="pb-mode-card pb-mode-active">
+            <input type="radio" name="pb-mode" value="0" checked style="display:none;"/>
+            <div class="pb-mode-icon">🎯</div>
+            <div class="pb-mode-title">Streamer Picks</div>
+            <div class="pb-mode-desc">You manually choose the winner after reviewing all submissions</div>
+          </label>
+          <label class="pb-mode-card">
+            <input type="radio" name="pb-mode" value="1" style="display:none;"/>
+            <div class="pb-mode-icon">🗳</div>
+            <div class="pb-mode-title">Community Vote</div>
+            <div class="pb-mode-desc">Viewers vote — highest voted clip wins when deadline passes</div>
+          </label>
+        </div>
+      </div>
+
+      <div style="margin-top:6px;">
+        <button class="btn btn-primary pb-submit-btn" onclick="postBounty()">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+          Post Bounty & Lock $BLAZE
+        </button>
+        <div id="tx-post" class="tx-status" style="display:none;"></div>
+        <div class="pb-footer-note">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+          Two wallet signatures if $BLAZE not yet approved. Already approved? Just one signature.
+        </div>
+      </div>
+    </div>
+
+    <!-- PROFILE -->
+    <div id="tab-profile" class="tab-content" style="display:none;">
+      <div class="page-header"><h2>My Profile</h2><p>Your identity — linked from Blaze and stored off-chain.</p></div>
+      <div id="pf-blaze-card" class="dash-profile-card" style="margin-bottom:16px;display:none;"></div>
+      <div class="form-group">
+        <label>Display username</label>
+        <input type="text" id="pf-username" placeholder="yourname"/>
+      </div>
+      <div class="form-group">
+        <label>X (Twitter) handle</label>
+        <input type="text" id="pf-xhandle" placeholder="yourhandle"/>
+      </div>
+      <div class="form-group">
+        <label>Blaze handle <span style="font-size:0.72rem;color:var(--orange);">— auto-filled after connecting Blaze</span></label>
+        <input type="text" id="pf-blazehandle" placeholder="auto-filled from Blaze account" readonly/>
+      </div>
+      <div class="form-group">
+        <label>I am a...</label>
+        <div style="display:flex;gap:16px;">
+          <label style="display:flex;align-items:center;gap:6px;font-size:0.85rem;"><input type="radio" name="pf-role" value="clipper" checked/> Clipper</label>
+          <label style="display:flex;align-items:center;gap:6px;font-size:0.85rem;"><input type="radio" name="pf-role" value="streamer"/> Streamer</label>
+        </div>
+      </div>
+      <button class="btn btn-primary" style="width:100%;" onclick="saveProfile()">💾 Save Profile</button>
+    </div>
+
   </div>
 </div>
 
@@ -1779,6 +1766,112 @@ textarea { resize: vertical; min-height: 76px; }
   font-size:0.65rem;font-weight:800;color:#fff;
   background:#E8350A;padding:2px 7px;border-radius:4px;
   animation:livePulse 1.5s ease-in-out infinite;
+}
+
+/* ── HOTEMIN-STYLE DASHBOARD TABS ── */
+.dash-tabbar {
+  display:flex;
+  background:var(--card);
+  border-bottom:2px solid var(--border);
+  overflow-x:auto;
+  -webkit-overflow-scrolling:touch;
+  scrollbar-width:none;
+  position:sticky;top:60px;z-index:40;
+}
+.dash-tabbar::-webkit-scrollbar { display:none; }
+.dash-tab {
+  padding:13px 18px;
+  font-size:0.8rem;font-weight:700;
+  color:var(--muted);cursor:pointer;
+  border-bottom:2px solid transparent;
+  margin-bottom:-2px;
+  white-space:nowrap;
+  transition:all 0.15s;
+  flex-shrink:0;
+}
+.dash-tab:hover { color:var(--text);background:rgba(255,255,255,0.03); }
+.dash-tab.active { color:var(--orange);border-bottom-color:var(--orange);background:rgba(255,107,26,0.04); }
+.dash-body { padding-top:20px;padding-bottom:80px; }
+
+/* ── PROFILE CARD ── */
+.dash-profile-card {
+  background:var(--card);
+  border:1px solid var(--border);
+  border-radius:14px;
+  padding:18px;
+  margin-bottom:16px;
+  position:relative;
+  overflow:hidden;
+}
+.dash-profile-card::before {
+  content:'';position:absolute;top:0;left:0;right:0;height:3px;
+  background:linear-gradient(90deg,var(--red),var(--orange),var(--amber));
+}
+.profile-avatar {
+  width:64px;height:64px;border-radius:50%;
+  border:2px solid var(--orange);object-fit:cover;display:block;
+}
+.live-overlay-badge {
+  position:absolute;bottom:0;right:0;
+  background:#E8350A;color:#fff;
+  font-size:0.5rem;font-weight:900;
+  padding:2px 5px;border-radius:4px;
+  border:1.5px solid var(--card);
+  animation:livePulse 1.5s ease-in-out infinite;
+}
+.profile-name { font-weight:800;font-size:1.1rem;margin-bottom:3px; }
+.profile-blaze-handle { font-size:0.77rem;color:var(--orange);margin-bottom:8px; }
+.profile-stats-row { display:flex;gap:8px;flex-wrap:wrap;align-items:center; }
+.profile-role-badge {
+  padding:2px 8px;border-radius:4px;font-size:0.65rem;
+  font-weight:800;text-transform:uppercase;letter-spacing:0.05em;
+  background:rgba(255,107,26,0.12);color:var(--orange);
+  border:1px solid rgba(255,107,26,0.3);
+}
+.profile-stat { font-size:0.72rem;color:var(--muted); }
+.live-stat { color:#E8350A;font-weight:700; }
+
+/* ── DASHBOARD STAT CARDS ── */
+.dash-stats-row {
+  display:grid;
+  grid-template-columns:repeat(auto-fit,minmax(140px,1fr));
+  gap:10px;margin-bottom:20px;
+}
+.dash-stat-card {
+  background:var(--card);border:1px solid var(--border);
+  border-radius:12px;padding:14px 16px;
+  display:flex;align-items:center;gap:12px;
+}
+.dash-stat-num {
+  font-family:var(--font-display);font-size:1.5rem;
+  color:var(--orange);line-height:1;
+}
+.dash-stat-label {
+  font-size:0.68rem;color:var(--muted);
+  text-transform:uppercase;letter-spacing:0.05em;margin-top:2px;
+}
+
+/* ── VOD ROWS ── */
+.vod-row {
+  display:flex;align-items:center;gap:12px;
+  background:var(--card);border:1px solid var(--border);
+  border-radius:10px;padding:10px 12px;cursor:pointer;
+  transition:border-color 0.15s;
+}
+.vod-row:hover { border-color:rgba(255,107,26,0.4); }
+.vod-thumb {
+  width:72px;height:42px;border-radius:6px;
+  object-fit:cover;flex-shrink:0;background:rgba(255,107,26,0.1);
+}
+.vod-info { flex:1;min-width:0; }
+.vod-title { font-size:0.82rem;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis; }
+.vod-meta { font-size:0.7rem;color:var(--muted);margin-top:2px; }
+
+@media(max-width:480px){
+  .dash-tab { padding:11px 12px;font-size:0.72rem; }
+  .profile-avatar { width:50px;height:50px; }
+  .vod-thumb { width:56px;height:34px; }
+  .vod-row .btn { display:none; }
 }
 </style>
 </body>
