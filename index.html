@@ -829,9 +829,9 @@ async function loadDashboard() {
   const liveViewers = document.getElementById('dash-live-viewers');
   if (liveCard && isLive) { liveCard.style.display='flex'; if(liveViewers) liveViewers.textContent=viewers.toLocaleString(); }
 
-  // Show/hide no-blaze prompt
+  // Show/hide no-blaze prompt — use Supabase profile as source of truth, not API
   const noBlaze = document.getElementById('dash-no-blaze');
-  if (noBlaze) noBlaze.style.display = channelData?.connected ? 'none' : 'block';
+  if (noBlaze) noBlaze.style.display = (profile?.blaze_user_id || handle || blazeProfile?.username) ? 'none' : 'block';
 
   // Live stream chip
   const streamStatus = document.getElementById('dash-stream-status');
