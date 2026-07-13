@@ -585,91 +585,206 @@ async function openBountyDetail(bountyId) {
   prevPage = document.querySelector('.page.active')?.id.replace('page-','') || 'bounties';
   showPage('bounty-detail');
   const el = document.getElementById('bd-content');
-  el.innerHTML = '<p style="color:var(--muted);">Loading…</p>';
+  el.innerHTML = `<div style="display:flex;flex-direction:column;gap:12px;padding:20px 0;">${[1,2,3].map(()=>'<div class="skeleton" style="height:60px;border-radius:10px;"></div>').join('')}</div>`;
+
   try {
     const reader = escrowRead || new ethers.Contract(ESCROW_ADDRESS, ESCROW_ABI, new ethers.JsonRpcProvider(FUJI_RPC));
-    const [raw, subs] = await Promise.all([reader.getBounty(bountyId), reader.getSubmissions(bountyId)]);
-    const b = { streamer:raw[0], reward:raw[1], deadline:raw[2], postedAt:raw[3], mode:raw[4], status:raw[5], vodId:raw[6], description:raw[7], submissionCount:raw[8], resolvedAt:raw[9] };
-    const reward = parseFloat(ethers.formatUnits(b.reward, blazeDecimals));
-    const isStreamer = userAddress && userAddress.toLowerCase() === b.streamer.toLowerCase();
-    const isOpen = Number(b.status) === STATUS_OPEN;
-    const isCommunityVote = Number(b.mode) === MODE_COMMUNITY_VOTE;
-    const deadlinePassed = Math.floor(Date.now()/1000) >= Number(b.deadline);
+    const [[raw, subs], claimRaw] = await Promise.all([
+      Promise.all([reader.getBounty(bountyId), reader.getSubmissions(bountyId)]),
+      userAddress ? reader.getClaimable(userAddress, bountyId).catch(()=>0n) : Promise.resolve(0n)
+    ]);
 
-    let claimableAmt = 0;
-    if (userAddress) {
-      try { claimableAmt = parseFloat(ethers.formatUnits(await reader.getClaimable(userAddress, bountyId), blazeDecimals)); } catch(e){}
-    }
+    const b = { streamer:raw[0], reward:raw[1], deadline:raw[2], postedAt:raw[3], mode:raw[4], status:raw[5], vodId:raw[6], description:raw[7], submissionCount:raw[8], resolvedAt:raw[9] };
+    const reward       = parseFloat(ethers.formatUnits(b.reward, blazeDecimals));
+    const claimableAmt = parseFloat(ethers.formatUnits(claimRaw, blazeDecimals));
+    const isStreamer    = userAddress && userAddress.toLowerCase() === b.streamer.toLowerCase();
+    const isOpen        = Number(b.status) === STATUS_OPEN;
+    const isCommunityVote = Number(b.mode) === MODE_COMMUNITY_VOTE;
+    const deadlinePassed  = Math.floor(Date.now()/1000) >= Number(b.deadline);
+    const rewardFmt     = reward >= 1000 ? (reward/1000).toFixed(1)+'K' : reward.toLocaleString(undefined,{maximumFractionDigits:0});
+    const postedDate    = b.postedAt ? new Date(Number(b.postedAt)*1000).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}) : '—';
+    const deadlineDate  = b.deadline ? new Date(Number(b.deadline)*1000).toLocaleString('en-US',{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'}) : '—';
+
+    let statusColor = isOpen ? '#22D47A' : Number(b.status)===STATUS_RESOLVED ? 'var(--muted)' : 'var(--red)';
+    let statusLabel = isOpen ? 'Open' : Number(b.status)===STATUS_RESOLVED ? 'Resolved' : 'Cancelled';
 
     el.innerHTML = `
-      <div class="bd-title">${escHtml(b.description)}</div>
-      <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px;">
-        <span class="bd-meta-pill">🎬 VOD: ${escHtml(b.vodId || 'n/a')}</span>
-        <span class="bd-meta-pill">${isCommunityVote ? '🗳 Community Vote' : '🎯 Streamer Pick'}</span>
-        <span class="bd-meta-pill">⏱ ${timeRemaining(b.deadline)}</span>
-        <span class="bd-meta-pill">👤 ${b.streamer.slice(0,6)}…${b.streamer.slice(-4)}${isStreamer?' (you)':''}</span>
-        ${statusBadge(b.status)}
-      </div>
-      <div class="bd-reward"><img src="${BLAZE_LOGO}" style="width:28px;height:28px;object-fit:contain;" onerror="this.style.display='none'"/>${reward.toLocaleString(undefined,{maximumFractionDigits:2})}</div>
-      <div class="bd-reward-label">$BLAZE TOTAL REWARD</div>
+    <div class="bd-wrap">
 
-      ${claimableAmt > 0 ? `
-      <div class="card" style="margin-top:16px;border-color:var(--orange);">
-        <div style="font-weight:700;color:var(--orange);">🏆 You won ${claimableAmt.toLocaleString()} $BLAZE on this bounty!</div>
-        <button class="btn btn-primary" style="margin-top:8px;width:100%;" onclick="claimReward(${bountyId})">💰 Claim Reward</button>
-      </div>` : ''}
-
-      ${isOpen && !isStreamer && !deadlinePassed ? `
-      <div class="card" style="margin-top:16px;">
-        <div class="section-title">Submit Your Clip</div>
-        <div class="form-group">
-          <label>X (Twitter) link to your clip</label>
-          <input type="text" id="bd-clip-link" placeholder="https://x.com/you/status/..."/>
+      <!-- HERO HEADER -->
+      <div class="bd-hero">
+        <div class="bd-hero-left">
+          <div class="bd-status-row">
+            <span class="bd-status-dot" style="background:${statusColor};box-shadow:0 0 6px ${statusColor}66;"></span>
+            <span class="bd-status-txt" style="color:${statusColor};">${statusLabel}</span>
+            <span class="bd-mode-chip">${isCommunityVote ? '🗳 Community Vote' : '🎯 Streamer Pick'}</span>
+          </div>
+          <div class="bd-title">${escHtml(b.description)}</div>
+          ${b.vodId ? `<div class="bd-vod-ref">🎬 ${escHtml(b.vodId)}</div>` : ''}
         </div>
-        <button class="btn btn-primary" style="width:100%;" onclick="submitClip(${bountyId})">📎 Submit Clip</button>
-        <div id="tx-submit" class="tx-status"></div>
+        <div class="bd-reward-hero">
+          <img src="${BLAZE_LOGO}" style="width:32px;height:32px;object-fit:contain;" onerror="this.style.display='none'" alt=""/>
+          <div class="bd-reward-num">${rewardFmt}</div>
+          <div class="bd-reward-sub">$BLAZE</div>
+        </div>
+      </div>
+
+      <!-- INFO GRID -->
+      <div class="bd-info-grid">
+        <div class="bd-info-card">
+          <div class="bd-info-label">⏱ Time Remaining</div>
+          <div class="bd-info-val" style="${isOpen && !deadlinePassed ? 'color:var(--orange);' : ''}">${timeRemaining(b.deadline)}</div>
+        </div>
+        <div class="bd-info-card">
+          <div class="bd-info-label">📅 Deadline</div>
+          <div class="bd-info-val">${deadlineDate}</div>
+        </div>
+        <div class="bd-info-card">
+          <div class="bd-info-label">📎 Submissions</div>
+          <div class="bd-info-val" style="color:var(--orange);">${Number(b.submissionCount)}</div>
+        </div>
+        <div class="bd-info-card">
+          <div class="bd-info-label">📆 Posted</div>
+          <div class="bd-info-val">${postedDate}</div>
+        </div>
+      </div>
+
+      <!-- STREAMER CARD (async enriched) -->
+      <div class="bd-streamer-card" id="bd-streamer-${bountyId}">
+        <div class="bd-streamer-loading">
+          <div style="font-size:0.78rem;color:var(--muted);">👤 Streamer: ${b.streamer.slice(0,6)}…${b.streamer.slice(-4)}${isStreamer?' (you)':''}</div>
+        </div>
+      </div>
+
+      <!-- CLAIM BANNER -->
+      ${claimableAmt > 0 ? `
+      <div class="bd-claim-banner">
+        <div>
+          <div style="font-weight:800;font-size:1rem;">🏆 You won this bounty!</div>
+          <div style="font-size:0.8rem;color:var(--muted);margin-top:2px;">${claimableAmt.toLocaleString()} $BLAZE ready to claim</div>
+        </div>
+        <button class="btn btn-primary" onclick="claimReward(${bountyId})">💰 Claim $BLAZE</button>
       </div>` : ''}
 
-      ${isOpen && isStreamer && b.submissionCount == 0 ? `
-      <button class="btn btn-ghost btn-danger" style="margin-top:12px;width:100%;" onclick="cancelBounty(${bountyId})">✕ Cancel Bounty (no submissions yet)</button>` : ''}
+      <!-- SUBMIT CLIP -->
+      ${isOpen && !isStreamer && !deadlinePassed ? `
+      <div class="bd-section">
+        <div class="bd-section-title">Submit Your Clip</div>
+        <div class="bd-section-body">
+          <p style="font-size:0.8rem;color:var(--muted);margin-bottom:10px;">Clip the moment from the streamer's Blaze stream, post it to X, then paste your X link below.</p>
+          <div class="form-group">
+            <label>Your X clip link</label>
+            <input type="text" id="bd-clip-link" placeholder="https://x.com/yourname/status/..."/>
+          </div>
+          <button class="btn btn-primary" style="width:100%;" onclick="submitClip(${bountyId})">📎 Submit Clip</button>
+          <div id="tx-submit" class="tx-status" style="display:none;"></div>
+        </div>
+      </div>` : ''}
 
-      <div class="section-title" style="margin-top:24px;">Submissions (${subs.length})</div>
-      ${subs.length === 0 ? '<p style="color:var(--muted);">No submissions yet. Be first!</p>' :
-        subs.map((s, i) => submissionHTML(s, i, bountyId, b, isStreamer, isCommunityVote, isOpen, deadlinePassed)).join('')}
+      ${isOpen && !isStreamer && deadlinePassed ? `<div class="bd-notice">⏰ Submissions are closed — deadline has passed.</div>` : ''}
 
+      <!-- STREAMER CONTROLS -->
+      ${isOpen && isStreamer && Number(b.submissionCount) === 0 ? `
+      <div class="bd-section">
+        <div class="bd-section-body">
+          <button class="btn btn-ghost" style="width:100%;border-color:var(--red);color:var(--red);" onclick="cancelBounty(${bountyId})">✕ Cancel Bounty & Refund</button>
+          <p style="font-size:0.7rem;color:var(--muted);margin-top:6px;">No submissions yet — you can cancel and get your $BLAZE back.</p>
+        </div>
+      </div>` : ''}
+
+      <!-- SUBMISSIONS -->
+      <div class="bd-section">
+        <div class="bd-section-title" style="display:flex;justify-content:space-between;align-items:center;">
+          <span>Submissions</span>
+          <span style="font-size:0.78rem;color:var(--muted);font-weight:400;">${subs.length} total</span>
+        </div>
+        <div class="bd-section-body">
+          ${subs.length === 0
+            ? `<div class="bd-empty">No clips submitted yet.<br/><span style="font-size:0.78rem;">Be the first to submit!</span></div>`
+            : subs.map((s,i) => submissionHTML(s, i, bountyId, b, isStreamer, isCommunityVote, isOpen, deadlinePassed)).join('')}
+        </div>
+      </div>
+
+      <!-- PICK WINNER (streamer) -->
       ${isOpen && isStreamer && Number(b.mode)===MODE_STREAMER_PICK && subs.length>0 ? pickWinnerPanelHTML(bountyId, subs) : ''}
-      ${isOpen && isCommunityVote && deadlinePassed && subs.length>0 ? `<button class="btn btn-primary" style="width:100%;margin-top:10px;" onclick="resolveCommunityVote(${bountyId})">🏁 Resolve Vote & Pay Winner(s)</button>` : ''}
-    `;
+      ${isOpen && isCommunityVote && deadlinePassed && subs.length>0 ? `
+      <div class="bd-section">
+        <div class="bd-section-body">
+          <button class="btn btn-primary" style="width:100%;" onclick="resolveCommunityVote(${bountyId})">🏁 Resolve Vote & Pay Winner(s)</button>
+        </div>
+      </div>` : ''}
+
+    </div>`;
+
+    // Async enrich streamer card
+    enrichBountyDetailStreamer(bountyId, b.streamer, isStreamer);
+
   } catch(e) {
-    el.innerHTML = `<p style="color:var(--red);">${escHtml(friendlyError(e))}</p>`;
+    el.innerHTML = `<div class="bd-error"><div style="font-size:1.5rem;margin-bottom:8px;">⚠️</div><div>${escHtml(friendlyError(e))}</div></div>`;
   }
 }
 
-function submissionHTML(s, i, bountyId, b, isStreamer, isCommunityVote, isOpen, deadlinePassed) {
-  return `
-  <div class="card" style="margin-bottom:10px;${s.isWinner?'border-color:var(--orange);':''}" data-sub-index="${i}">
-    <div style="display:flex;align-items:center;gap:10px;">
-      <div class="sub-index">${i+1}</div>
-      <div style="flex:1;min-width:0;">
-        <a href="${escHtml(s.clipLink)}" target="_blank" class="sub-link">${escHtml(s.clipLink)}</a>
-        <div class="sub-meta">${s.clipper.slice(0,6)}…${s.clipper.slice(-4)} ${s.isWinner?'· 🏆 Winner':''}</div>
+async function enrichBountyDetailStreamer(bountyId, wallet, isStreamer) {
+  const el = document.getElementById(`bd-streamer-${bountyId}`);
+  if (!el) return;
+  const info = await fetchStreamerProfile(wallet);
+  el.innerHTML = `
+    <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
+      ${info.avatar
+        ? `<img src="${escHtml(info.avatar)}" style="width:42px;height:42px;border-radius:50%;border:2px solid var(--orange);object-fit:cover;" onerror="this.style.display='none'"/>`
+        : `<div style="width:42px;height:42px;border-radius:50%;background:rgba(255,107,26,0.12);border:2px solid var(--orange);display:flex;align-items:center;justify-content:center;font-size:1.2rem;">🎬</div>`}
+      <div style="flex:1;min-width:140px;">
+        <div style="font-weight:700;font-size:0.9rem;">${escHtml(info.handle || wallet.slice(0,6)+'…'+wallet.slice(-4))}${isStreamer ? ' <span style="font-size:0.65rem;color:var(--orange);">(you)</span>' : ''}</div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:4px;">
+          ${info.isLive ? `<span style="font-size:0.68rem;color:#E8350A;font-weight:700;animation:livePulse 1.5s infinite;">● LIVE NOW · ${info.viewers} viewers</span>` : ''}
+          ${info.followers ? `<span style="font-size:0.68rem;color:var(--muted);">👥 ${Number(info.followers).toLocaleString()} followers</span>` : ''}
+          ${info.subscribers ? `<span style="font-size:0.68rem;color:var(--muted);">⭐ ${Number(info.subscribers).toLocaleString()} subs</span>` : ''}
+        </div>
       </div>
-      ${isCommunityVote ? `<div class="sub-votes"><span class="vote-num">${s.voteCount}</span><span style="font-size:0.65rem;color:var(--muted);">votes</span></div>` : ''}
+      ${info.isLive ? `<span class="bd-live-badge">🔴 LIVE</span>` : ''}
+    </div>`;
+}
+
+function submissionHTML(s, i, bountyId, b, isStreamer, isCommunityVote, isOpen, deadlinePassed) {
+  const clipperShort = s.clipper.slice(0,6)+'…'+s.clipper.slice(-4);
+  const isMyClip = userAddress && s.clipper.toLowerCase() === userAddress.toLowerCase();
+  return `
+  <div class="sub-card ${s.isWinner ? 'sub-card-winner' : ''}" data-sub-index="${i}">
+    <div class="sub-card-header">
+      <div class="sub-num">${i+1}</div>
+      <div style="flex:1;min-width:0;">
+        <a href="${escHtml(s.clipLink)}" target="_blank" rel="noreferrer" class="sub-link">${escHtml(s.clipLink.replace('https://',''))}</a>
+        <div class="sub-card-meta">
+          <span>👤 ${clipperShort}${isMyClip?' <strong style="color:var(--orange);">(you)</strong>':''}</span>
+          ${s.isWinner ? '<span class="sub-winner-badge">🏆 WINNER</span>' : ''}
+        </div>
+      </div>
+      ${isCommunityVote ? `<div class="sub-vote-box"><div class="sub-vote-num">${Number(s.voteCount)}</div><div class="sub-vote-label">votes</div></div>` : ''}
     </div>
-    ${isCommunityVote && isOpen && !deadlinePassed && !isStreamer ? `<button class="btn btn-ghost btn-sm" style="margin-top:8px;width:100%;" onclick="voteSubmission(${bountyId},${i})">👍 Vote for this clip</button>` : ''}
-    ${isStreamer && Number(b.mode)===MODE_STREAMER_PICK && isOpen ? `<label style="display:flex;gap:6px;align-items:center;margin-top:8px;font-size:0.8rem;color:var(--muted);"><input type="checkbox" class="pw-checkbox" data-idx="${i}"/> Select as winner</label>` : ''}
+    <div class="sub-card-actions">
+      ${isCommunityVote && isOpen && !deadlinePassed && !isStreamer ? `<button class="btn btn-ghost btn-sm sub-vote-btn" onclick="voteSubmission(${bountyId},${i})">👍 Vote for this clip</button>` : ''}
+      ${isStreamer && Number(b.mode)===MODE_STREAMER_PICK && isOpen ? `
+      <label class="sub-select-label">
+        <input type="checkbox" class="pw-checkbox" data-idx="${i}"/>
+        <span>Select as winner</span>
+      </label>` : ''}
+    </div>
   </div>`;
 }
 
 function pickWinnerPanelHTML(bountyId, subs) {
   return `
-  <div class="card" style="margin-top:14px;background:rgba(255,107,26,0.05);">
-    <div style="font-weight:700;margin-bottom:8px;">🏆 Pick Winner(s) & Split Reward</div>
-    <p style="font-size:0.78rem;color:var(--muted);margin-bottom:10px;">Check one or more submissions above, then enter how much $BLAZE each gets. Amounts must add up exactly to the total reward.</p>
-    <div id="pw-amounts"></div>
-    <button class="btn btn-ghost btn-sm" style="margin-bottom:8px;" onclick="renderWinnerAmountInputs(${bountyId})">↻ Refresh selected</button>
-    <button class="btn btn-primary" style="width:100%;" onclick="confirmPickWinner(${bountyId})">✅ Confirm & Pay Out</button>
-    <div id="tx-pick" class="tx-status"></div>
+  <div class="bd-section bd-pick-panel">
+    <div class="bd-section-title">🏆 Pick Winner(s) & Split Reward</div>
+    <div class="bd-section-body">
+      <p style="font-size:0.78rem;color:var(--muted);margin-bottom:12px;">Check submissions above, then enter the $BLAZE amount each winner gets. Must add up exactly to the total reward.</p>
+      <div id="pw-amounts" style="margin-bottom:10px;"></div>
+      <div style="display:flex;gap:8px;">
+        <button class="btn btn-ghost btn-sm" style="flex:1;" onclick="renderWinnerAmountInputs(${bountyId})">↻ Refresh Selected</button>
+        <button class="btn btn-primary" style="flex:2;" onclick="confirmPickWinner(${bountyId})">✅ Pay Out Winner(s)</button>
+      </div>
+      <div id="tx-pick" class="tx-status" style="display:none;"></div>
+    </div>
   </div>`;
 }
 
@@ -1406,12 +1521,21 @@ textarea { resize: vertical; min-height: 76px; }
   </div>
   <div class="nav-right">
     <button class="btn btn-ghost btn-sm nav-desktop-only" onclick="showPage('bounties')" style="font-size:0.7rem;">Bounties</button>
+    <button class="btn btn-ghost btn-sm nav-desktop-only" onclick="showPage('docs')" style="font-size:0.7rem;">Docs</button>
     <span id="nav-addr" class="nav-addr" style="display:none"></span>
-    <button id="btn-blaze" class="btn btn-ghost btn-sm" style="display:none" onclick="connectBlaze()">🔥 Connect Blaze</button>
-    <span id="blaze-connected-badge" class="nav-addr" style="display:none;color:#FF6B1A;border-color:#FF6B1A;"></span>
-    <button id="btn-connect" class="btn btn-primary btn-sm" onclick="connectWallet()">Connect</button>
-    <button id="btn-dashboard" class="btn btn-orange btn-sm nav-dash-btn" style="display:none" onclick="showPage('dashboard')">⚡ <span class="dash-text">Dashboard</span></button>
-    <button id="btn-disconnect" class="btn btn-ghost btn-sm nav-desktop-only" style="display:none" onclick="disconnectWallet()">⏻</button>
+    <span id="blaze-connected-badge" class="blaze-nav-badge" style="display:none"></span>
+    <button id="btn-blaze" class="btn btn-blaze-connect btn-sm" style="display:none" onclick="connectBlaze()">
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+      Connect Blaze
+    </button>
+    <button id="btn-connect" class="btn btn-primary btn-sm" onclick="connectWallet()">Connect Wallet</button>
+    <button id="btn-dashboard" class="btn btn-dashboard-nav btn-sm" style="display:none" onclick="showPage('dashboard')">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
+      <span class="dash-text">Dashboard</span>
+    </button>
+    <button id="btn-disconnect" class="btn btn-ghost btn-sm nav-desktop-only" style="display:none" onclick="disconnectWallet()" title="Disconnect">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+    </button>
   </div>
 </nav>
 
@@ -1437,6 +1561,7 @@ textarea { resize: vertical; min-height: 76px; }
             <button class="btn btn-primary" id="hero-connect-btn" onclick="connectWallet()">🔥 Connect & Start</button>
             <button class="btn btn-ghost" id="hero-dashboard-btn" style="display:none" onclick="showPage('dashboard')">⚡ Dashboard</button>
             <button class="btn btn-ghost" onclick="showPage('bounties')">Browse Bounties</button>
+            <button class="btn btn-ghost" onclick="showPage('docs')">📄 Docs</button>
           </div>
           <div class="hero-stats">
             <div><div class="stat-num" id="stat-bounties">0</div><div class="stat-label">Open Bounties</div></div>
@@ -2069,6 +2194,249 @@ textarea { resize: vertical; min-height: 76px; }
   .overview-grid { grid-template-columns: 1fr; }
   .bc-time { display: none; }
 }
+
+/* ── BOUNTY DETAIL ── */
+.bd-wrap { display:flex;flex-direction:column;gap:14px;padding-bottom:60px; }
+.bd-hero { display:flex;gap:16px;align-items:flex-start;background:var(--card);border:1px solid var(--border);border-radius:14px;padding:18px;position:relative;overflow:hidden; }
+.bd-hero::before { content:'';position:absolute;top:0;left:0;right:0;height:3px;background:linear-gradient(90deg,var(--red),var(--orange),var(--amber)); }
+.bd-hero-left { flex:1;min-width:0; }
+.bd-status-row { display:flex;align-items:center;gap:8px;margin-bottom:10px;flex-wrap:wrap; }
+.bd-status-dot { width:9px;height:9px;border-radius:50%;flex-shrink:0; }
+.bd-status-txt { font-size:0.75rem;font-weight:800;text-transform:uppercase;letter-spacing:0.05em; }
+.bd-mode-chip { font-size:0.68rem;background:rgba(255,255,255,0.06);border:1px solid var(--border);padding:2px 8px;border-radius:4px;color:var(--muted); }
+.bd-title { font-weight:800;font-size:1rem;line-height:1.45;margin-bottom:8px; }
+.bd-vod-ref { font-size:0.72rem;color:var(--muted);background:rgba(255,255,255,0.04);border:1px solid var(--border);border-radius:4px;padding:3px 8px;display:inline-block; }
+.bd-reward-hero { display:flex;flex-direction:column;align-items:center;background:rgba(255,107,26,0.08);border:1px solid rgba(255,107,26,0.25);border-radius:12px;padding:12px 16px;flex-shrink:0;min-width:90px;text-align:center;gap:3px; }
+.bd-reward-num { font-family:var(--font-display);font-size:1.6rem;color:var(--orange);line-height:1; }
+.bd-reward-sub { font-size:0.6rem;color:var(--muted);text-transform:uppercase;letter-spacing:0.08em; }
+.bd-info-grid { display:grid;grid-template-columns:repeat(2,1fr);gap:8px; }
+.bd-info-card { background:var(--card);border:1px solid var(--border);border-radius:10px;padding:12px 14px; }
+.bd-info-label { font-size:0.65rem;color:var(--muted);text-transform:uppercase;letter-spacing:0.06em;margin-bottom:4px; }
+.bd-info-val { font-size:0.9rem;font-weight:700; }
+.bd-streamer-card { background:var(--card);border:1px solid var(--border);border-radius:12px;padding:14px 16px; }
+.bd-live-badge { background:#E8350A;color:#fff;font-size:0.6rem;font-weight:800;padding:3px 7px;border-radius:4px;animation:livePulse 1.5s infinite; }
+.bd-claim-banner { display:flex;align-items:center;justify-content:space-between;gap:12px;background:rgba(255,107,26,0.1);border:1.5px solid rgba(255,107,26,0.4);border-radius:12px;padding:14px 16px;flex-wrap:wrap; }
+.bd-section { background:var(--card);border:1px solid var(--border);border-radius:12px;overflow:hidden; }
+.bd-section-title { font-size:0.78rem;font-weight:800;text-transform:uppercase;letter-spacing:0.05em;padding:12px 16px;background:rgba(255,255,255,0.02);border-bottom:1px solid var(--border); }
+.bd-section-body { padding:14px 16px; }
+.bd-pick-panel { border-color:rgba(255,107,26,0.3);background:rgba(255,107,26,0.04); }
+.bd-notice { text-align:center;font-size:0.8rem;color:var(--muted);padding:12px;background:var(--card);border:1px solid var(--border);border-radius:10px; }
+.bd-empty { text-align:center;color:var(--muted);padding:24px 0;line-height:1.8; }
+.bd-error { text-align:center;color:var(--red);padding:24px;background:rgba(232,53,10,0.06);border:1px solid rgba(232,53,10,0.2);border-radius:12px; }
+
+/* Submission cards */
+.sub-card { background:rgba(255,255,255,0.02);border:1px solid var(--border);border-radius:10px;padding:12px 14px;margin-bottom:8px;transition:border-color 0.15s; }
+.sub-card:hover { border-color:rgba(255,107,26,0.3); }
+.sub-card-winner { border-color:var(--orange);background:rgba(255,107,26,0.05); }
+.sub-card-header { display:flex;align-items:flex-start;gap:10px; }
+.sub-num { width:24px;height:24px;border-radius:50%;background:rgba(255,107,26,0.12);border:1px solid rgba(255,107,26,0.3);display:flex;align-items:center;justify-content:center;font-size:0.7rem;font-weight:800;color:var(--orange);flex-shrink:0;margin-top:2px; }
+.sub-link { font-size:0.78rem;color:var(--orange);word-break:break-all;text-decoration:none;display:block; }
+.sub-link:hover { text-decoration:underline; }
+.sub-card-meta { display:flex;align-items:center;gap:8px;margin-top:4px;flex-wrap:wrap;font-size:0.68rem;color:var(--muted); }
+.sub-winner-badge { background:var(--orange);color:#000;font-size:0.6rem;font-weight:800;padding:1px 6px;border-radius:3px; }
+.sub-vote-box { display:flex;flex-direction:column;align-items:center;background:rgba(255,107,26,0.08);border:1px solid rgba(255,107,26,0.2);border-radius:8px;padding:6px 10px;flex-shrink:0; }
+.sub-vote-num { font-family:var(--font-display);font-size:1.1rem;color:var(--orange);line-height:1; }
+.sub-vote-label { font-size:0.55rem;color:var(--muted);text-transform:uppercase; }
+.sub-card-actions { margin-top:10px; }
+.sub-vote-btn { width:100%; }
+.sub-select-label { display:flex;align-items:center;gap:8px;font-size:0.8rem;color:var(--muted);cursor:pointer; }
+.skeleton { background:linear-gradient(90deg,rgba(255,255,255,0.04) 25%,rgba(255,255,255,0.08) 50%,rgba(255,255,255,0.04) 75%);background-size:200% 100%;animation:shimmer 1.4s infinite; }
+@keyframes shimmer { 0%{background-position:200% 0} 100%{background-position:-200% 0} }
+
+/* ── DOCS PAGE ── */
+.docs-wrap { max-width:860px;margin:0 auto;padding:30px 0 80px; }
+.docs-hero { text-align:center;padding:40px 20px;margin-bottom:32px; }
+.docs-hero h1 { font-family:var(--font-display);font-size:clamp(2rem,6vw,3.5rem);background:linear-gradient(135deg,var(--orange),var(--amber));-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;margin-bottom:8px; }
+.docs-testnet-banner { background:rgba(232,53,10,0.1);border:1.5px solid rgba(232,53,10,0.4);border-radius:12px;padding:14px 18px;margin-bottom:28px;display:flex;align-items:flex-start;gap:10px; }
+.docs-section { margin-bottom:28px; }
+.docs-section-title { font-family:var(--font-display);font-size:1.4rem;color:var(--orange);margin-bottom:14px;letter-spacing:0.03em; }
+.docs-card { background:var(--card);border:1px solid var(--border);border-radius:12px;padding:18px;margin-bottom:10px; }
+.docs-card h4 { font-weight:700;margin-bottom:6px;font-size:0.9rem; }
+.docs-card p { font-size:0.82rem;color:var(--muted);line-height:1.6;margin:0; }
+.docs-code { background:rgba(255,255,255,0.04);border:1px solid var(--border);border-radius:8px;padding:12px 14px;font-family:var(--font-mono);font-size:0.72rem;color:var(--orange);word-break:break-all;margin:8px 0; }
+.docs-api-row { display:flex;align-items:flex-start;gap:10px;padding:10px 0;border-bottom:1px solid rgba(255,255,255,0.04); }
+.docs-api-row:last-child { border-bottom:none; }
+.docs-method { font-size:0.65rem;font-weight:800;padding:2px 7px;border-radius:4px;flex-shrink:0;margin-top:1px; }
+.docs-method-get { background:rgba(34,212,122,0.15);color:#22D47A;border:1px solid rgba(34,212,122,0.3); }
+.docs-method-post { background:rgba(255,107,26,0.15);color:var(--orange);border:1px solid rgba(255,107,26,0.3); }
+.docs-api-path { font-family:var(--font-mono);font-size:0.75rem;color:var(--text);font-weight:600; }
+.docs-api-desc { font-size:0.75rem;color:var(--muted);margin-top:2px; }
+.docs-fn-grid { display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:8px; }
+.docs-fn-card { background:rgba(255,107,26,0.05);border:1px solid rgba(255,107,26,0.15);border-radius:8px;padding:12px; }
+.docs-fn-name { font-family:var(--font-mono);font-size:0.75rem;font-weight:700;color:var(--orange);margin-bottom:4px; }
+.docs-fn-desc { font-size:0.7rem;color:var(--muted); }
+.docs-nav { display:flex;gap:8px;flex-wrap:wrap;justify-content:center;margin-bottom:24px; }
+.docs-nav a { font-size:0.75rem;padding:5px 12px;border:1px solid var(--border);border-radius:20px;color:var(--muted);text-decoration:none;transition:all 0.15s; }
+.docs-nav a:hover { border-color:var(--orange);color:var(--orange); }
+
+@media(max-width:640px){
+  .bd-info-grid { grid-template-columns:repeat(2,1fr); }
+  .bd-reward-hero { padding:10px 12px;min-width:76px; }
+  .bd-reward-num { font-size:1.3rem; }
+}
 </style>
+
+<!-- ==================== PAGE: DOCS ==================== -->
+<div id="page-docs" class="page">
+  <div class="container docs-wrap">
+
+    <div class="docs-hero">
+      <div style="font-size:0.75rem;color:var(--orange);font-weight:700;text-transform:uppercase;letter-spacing:0.1em;margin-bottom:8px;">Built for Blaze API Hackathon</div>
+      <h1>BlazDAO Docs</h1>
+      <p style="color:var(--muted);max-width:520px;margin:0 auto;font-size:0.9rem;line-height:1.6;">The first Blaze-native clipping economy — connecting streamers and clippers through trustless smart contract escrow powered by $BLAZE.</p>
+    </div>
+
+    <div class="docs-nav">
+      <a href="#what">What is BlazDAO</a>
+      <a href="#how">How It Works</a>
+      <a href="#blaze-api">Blaze API Usage</a>
+      <a href="#contracts">Smart Contracts</a>
+      <a href="#testnet">Testnet Status</a>
+      <a href="#roadmap">Roadmap</a>
+    </div>
+
+    <!-- TESTNET BANNER -->
+    <div class="docs-testnet-banner" id="testnet">
+      <div style="font-size:1.2rem;flex-shrink:0;">⚠️</div>
+      <div>
+        <div style="font-weight:800;margin-bottom:3px;">Currently on Avalanche Fuji Testnet</div>
+        <div style="font-size:0.8rem;color:var(--muted);line-height:1.5;">BlazDAO is live on Fuji testnet with a mock $BLAZE token for testing. We plan to use Blaze Hackathon funding to move to Avalanche C-Chain mainnet with real $BLAZE, covering audits, mainnet deployment, and liquidity bootstrapping.</div>
+      </div>
+    </div>
+
+    <!-- WHAT IS BLAZEDAO -->
+    <div class="docs-section" id="what">
+      <div class="docs-section-title">What is BlazDAO?</div>
+      <div class="docs-card">
+        <p>BlazDAO is a decentralised clipping economy built natively on top of Blaze.stream. Streamers post $BLAZE-denominated bounties tied to their real Blaze VODs and streams. Clippers watch the stream, capture the best moment, post the clip to X (Twitter), and submit the link on-chain. The streamer (or community vote) picks the winning clip, and the escrowed $BLAZE pays out automatically via smart contract — no middlemen, no manual payments, no trust required.</p>
+      </div>
+      <div class="docs-card">
+        <h4>🎯 Problem it solves</h4>
+        <p>Streamers want their streams clipped and shared to grow their audience. Clippers want to be compensated for quality content creation. Today, both sides operate informally with no guarantee of payment and no structured incentive. BlazDAO puts bounties on-chain and pays clippers in $BLAZE the moment a winner is chosen.</p>
+      </div>
+    </div>
+
+    <!-- HOW IT WORKS -->
+    <div class="docs-section" id="how">
+      <div class="docs-section-title">How It Works</div>
+      <div style="display:flex;flex-direction:column;gap:10px;">
+        ${[
+          ['1. Sign Up', 'Connect your EVM wallet (MetaMask, Core, or any WalletConnect-compatible wallet) and link your Blaze.stream account via OAuth. Your Blaze identity is verified server-side and stored in our backend — no NFT minting required.'],
+          ['2. Streamer Posts Bounty', 'Streamers lock $BLAZE in escrow via our smart contract. The bounty is tied to a specific Blaze VOD so clippers know exactly what to clip. Two modes: Streamer Picks (you choose the winner) or Community Vote (highest-voted clip wins).'],
+          ['3. Clippers Submit', 'Clippers clip the moment from the Blaze stream, post it to X, and submit the X link on-chain. The clip is recorded immutably and tied to the bounty.'],
+          ['4. Winner Picked', 'The streamer reviews submissions and picks the winner(s) — or in Community Vote mode, the contract resolves automatically once the deadline passes by tallying the highest-voted submission.'],
+          ['5. Automatic Payout', 'The winning clipper(s) call claim() on the contract and receive their $BLAZE share directly in their wallet. The contract enforces the split — no manual payment, no platform fee, no trust required.']
+        ].map(([title, desc]) => `<div class="docs-card"><h4>${title}</h4><p>${desc}</p></div>`).join('')}
+      </div>
+    </div>
+
+    <!-- BLAZE API USAGE -->
+    <div class="docs-section" id="blaze-api">
+      <div class="docs-section-title">Blaze API Usage</div>
+      <div class="docs-card" style="margin-bottom:14px;">
+        <p>BlazDAO integrates Blaze's developer API throughout the entire user journey — from identity verification to live stream data to community engagement. Below is every Blaze API endpoint we use and why.</p>
+      </div>
+
+      <div class="docs-card">
+        <h4 style="margin-bottom:12px;">Authentication</h4>
+        <div class="docs-api-row">
+          <span class="docs-method docs-method-post">POST</span>
+          <div><div class="docs-api-path">blaze.stream/bapi/oauth2/generate-auth-url</div><div class="docs-api-desc">Generates a PKCE auth URL for user login. We use this to let streamers and clippers connect their Blaze account — this is the primary identity mechanism, replacing wallet-only sign-up.</div></div>
+        </div>
+        <div class="docs-api-row">
+          <span class="docs-method docs-method-post">POST</span>
+          <div><div class="docs-api-path">blaze.stream/bapi/oauth2/token</div><div class="docs-api-desc">Exchanges the auth code + code verifier for an access token and refresh token. Used immediately after the OAuth redirect completes.</div></div>
+        </div>
+        <div class="docs-api-row">
+          <span class="docs-method docs-method-post">POST</span>
+          <div><div class="docs-api-path">blaze.stream/bapi/oauth2/refresh</div><div class="docs-api-desc">Refreshes an expired access token silently in our backend. Access tokens expire after 1 hour — we auto-refresh so users never see an auth error.</div></div>
+        </div>
+      </div>
+
+      <div class="docs-card" style="margin-top:10px;">
+        <h4 style="margin-bottom:12px;">User & Channel Data</h4>
+        <div class="docs-api-row">
+          <span class="docs-method docs-method-get">GET</span>
+          <div><div class="docs-api-path">api.blaze.stream/v1/users/profile</div><div class="docs-api-desc">Fetches the authenticated user's profile — username, displayName, avatarUrl, user ID. Used to populate dashboard profiles, nav badges, and bounty card streamer info.</div></div>
+        </div>
+        <div class="docs-api-row">
+          <span class="docs-method docs-method-get">GET</span>
+          <div><div class="docs-api-path">api.blaze.stream/v1/channels/{channelId}/stats</div><div class="docs-api-desc">Follower count, subscriber count, total views. Shown on the dashboard overview and on each bounty card to give clippers social-proof context about the streamer they're clipping for.</div></div>
+        </div>
+        <div class="docs-api-row">
+          <span class="docs-method docs-method-get">GET</span>
+          <div><div class="docs-api-path">api.blaze.stream/v1/channels/{channelId}/live-stats</div><div class="docs-api-desc">Real-time live status, viewer count, stream title, game/category. Powers the pulsing LIVE badge on bounty cards and the overview dashboard — clippers can see instantly which streamers are live right now.</div></div>
+        </div>
+        <div class="docs-api-row">
+          <span class="docs-method docs-method-get">GET</span>
+          <div><div class="docs-api-path">api.blaze.stream/v1/channels/{channelId}/vods</div><div class="docs-api-desc">Fetches recent VODs for the authenticated streamer. Displayed in the dashboard overview so streamers can pick which VOD their bounty should target with one click.</div></div>
+        </div>
+        <div class="docs-api-row">
+          <span class="docs-method docs-method-get">GET</span>
+          <div><div class="docs-api-path">api.blaze.stream/v1/channels/clips?channelId=</div><div class="docs-api-desc">Fetches recent Blaze-native clips for a channel. Shown in the dashboard overview as channel activity. Planned use: verify that a submitted X clip legitimately originated from this Blaze channel.</div></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- SMART CONTRACTS -->
+    <div class="docs-section" id="contracts">
+      <div class="docs-section-title">Smart Contracts</div>
+      <div class="docs-card">
+        <h4>ClipDAOEscrow — Fuji Testnet</h4>
+        <div class="docs-code">0xc515aaB3b3BBDC2313dc72e1603E0E1ccB419Ee1</div>
+        <p>The core escrow contract. Handles bounty creation, clip submission, voting, winner selection, and pull-pattern payout. Built with ReentrancyGuard, Pausable, and Ownable (OpenZeppelin v5). ERC-20 native ($BLAZE), no native AVAX handling.</p>
+      </div>
+      <div class="docs-card" style="margin-top:10px;">
+        <h4>Mock $BLAZE Token — Fuji Testnet</h4>
+        <div class="docs-code">0x57BAEAC484A0F3d5694d81420402FE54D4fBfec7</div>
+        <p>Standard ERC-20 (18 decimals) used for testnet development. Includes a faucet() function with a 1-hour cooldown that mints 10,000 mBLAZE per claim. Will be replaced with the real $BLAZE token address on mainnet.</p>
+      </div>
+      <div class="docs-card" style="margin-top:10px;">
+        <h4 style="margin-bottom:12px;">Contract Functions</h4>
+        <div class="docs-fn-grid">
+          ${[
+            ['postBounty()', 'Lock $BLAZE in escrow, set VOD ref, description, mode, and deadline'],
+            ['submitClip()', 'Submit an X clip link on-chain, tied to a bounty'],
+            ['voteSubmission()', 'Community vote mode — one vote per wallet per bounty'],
+            ['pickWinner()', 'Streamer chooses winner(s) with custom $BLAZE splits'],
+            ['claim()', 'Pull-pattern: winner withdraws their $BLAZE reward'],
+            ['cancelBounty()', 'Streamer can cancel within 1hr grace period for full refund'],
+          ].map(([name, desc]) => `<div class="docs-fn-card"><div class="docs-fn-name">${name}</div><div class="docs-fn-desc">${desc}</div></div>`).join('')}
+        </div>
+      </div>
+      <div class="docs-card" style="margin-top:10px;">
+        <h4>Security Highlights</h4>
+        <p>Pull-payment pattern prevents reentrancy on all token transfers. SafeERC20 guards against non-standard ERC-20 behaviour. Splits must sum to exactly the bounty reward — no token lockup or over-allocation possible. Streamer cannot submit to or vote on their own bounty. One submission + one vote per wallet per bounty. Submission cap of 200 per bounty prevents gas-griefing DoS on winner resolution. Admin can only sweep funds that have sat unclaimed for 180+ days — can never touch an active bounty's escrow.</p>
+      </div>
+    </div>
+
+    <!-- TESTNET & MAINNET -->
+    <div class="docs-section">
+      <div class="docs-section-title">Testnet → Mainnet Plan</div>
+      <div class="docs-card">
+        <h4>Current state</h4>
+        <p>BlazDAO is fully functional on Avalanche Fuji testnet. Real user flows work end-to-end: Blaze OAuth login, bounty creation, clip submission, winner selection, and $BLAZE payout — all on testnet with mock tokens. The Blaze API integration is production-ready.</p>
+      </div>
+      <div class="docs-card" style="margin-top:10px;">
+        <h4>How Hackathon Funding Gets Us to Mainnet</h4>
+        <p>Smart contract audit (~$8–15K), Avalanche C-Chain mainnet deployment, frontend domain + infra, initial $BLAZE liquidity for the escrow contract, and community growth budget. We're applying to the Blaze Builder Challenge specifically because the prize provides exactly the bridge needed to move from a working testnet product to a live mainnet platform with real $BLAZE rewards for real clippers.</p>
+      </div>
+    </div>
+
+    <!-- ROADMAP -->
+    <div class="docs-section" id="roadmap">
+      <div class="docs-section-title">Roadmap</div>
+      <div style="display:flex;flex-direction:column;gap:8px;">
+        ${[
+          ['✅ Done', 'Blaze OAuth integration, ERC-20 escrow contract, bounty board, clip submission, streamer pick & community vote, $BLAZE payouts, dashboard with Blaze channel stats + VODs + clips, live status badges'],
+          ['🔄 In Progress', 'Blaze clip verification (confirm X clip came from a real Blaze VOD using clip API), streamer analytics page, mobile UX polish'],
+          ['📋 Planned', 'Mainnet launch with real $BLAZE, Blaze chat bot shoutouts (using hotemin bot pattern) when bounty won, clipper leaderboard, reputation system tied to Blaze channel stats'],
+          ['🌟 Future', 'Multi-platform clip support, DAO governance for platform parameters, tiered bounties with Blaze subscription gating, Blaze channel-exclusive bounties for subscribers only']
+        ].map(([phase, items]) => `<div class="docs-card"><h4>${phase}</h4><p>${items}</p></div>`).join('')}
+      </div>
+    </div>
+
+  </div>
+</div>
 </body>
 </html>
