@@ -1,3 +1,4 @@
+
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -437,27 +438,30 @@ function bountyCardHTML(b) {
 
   return `
   <div class="bc" data-bounty-id="${b.id}" onclick="openBountyDetail(${b.id})">
-    <div class="bc-header">
-      <div class="bc-status-row">
-        ${statusDot}
-        <span class="bc-status-text">${isOpen ? 'Open' : isResolved ? 'Resolved' : 'Cancelled'}</span>
-        <span class="bc-live-badge" style="display:none;">● LIVE</span>
-        <span class="bc-pill">${isCV ? '🗳 Vote' : '🎯 Pick'}</span>
-        <span class="bc-time">${timeLeft}</span>
+    <div class="bc-banner" id="bc-banner-${b.id}"><div class="bc-banner-placeholder"></div></div>
+    <div class="bc-inner">
+      <div class="bc-header">
+        <div class="bc-status-row">
+          ${statusDot}
+          <span class="bc-status-text">${isOpen ? 'Open' : isResolved ? 'Resolved' : 'Cancelled'}</span>
+          <span class="bc-live-badge" style="display:none;">● LIVE</span>
+          <span class="bc-pill">${isCV ? '🗳 Vote' : '🎯 Pick'}</span>
+          <span class="bc-time">${timeLeft}</span>
+        </div>
+        <div class="bc-reward">
+          <img src="${BLAZE_LOGO}" class="bc-logo" onerror="this.style.display='none'" alt=""/>
+          <span class="bc-reward-num">${rewardFmt}</span>
+          <span class="bc-reward-label">$BLAZE</span>
+        </div>
       </div>
-      <div class="bc-reward">
-        <img src="${BLAZE_LOGO}" class="bc-logo" onerror="this.style.display='none'" alt=""/>
-        <span class="bc-reward-num">${rewardFmt}</span>
-        <span class="bc-reward-label">$BLAZE</span>
+      <div class="bc-desc">${escHtml(b.description.slice(0,100))}${b.description.length>100?'…':''}</div>
+      ${b.vodId ? `<div class="bc-vod">🎬 ${escHtml(b.vodId.slice(0,60))}</div>` : ''}
+      <div class="bc-footer">
+        <div class="streamer-meta">
+          <span class="bc-streamer-addr">👤 ${escHtml(streamerShort)}</span>
+        </div>
+        <span class="bc-clips">${Number(b.submissionCount)} clip${Number(b.submissionCount)!==1?'s':''}</span>
       </div>
-    </div>
-    <div class="bc-desc">${escHtml(b.description.slice(0,100))}${b.description.length>100?'…':''}</div>
-    ${b.vodId ? `<div class="bc-vod">🎬 ${escHtml(b.vodId.slice(0,60))}</div>` : ''}
-    <div class="bc-footer">
-      <div class="streamer-meta">
-        <span class="bc-streamer-addr">👤 ${escHtml(streamerShort)}</span>
-      </div>
-      <span class="bc-clips">${Number(b.submissionCount)} clip${Number(b.submissionCount)!==1?'s':''}</span>
     </div>
   </div>`;
 }
@@ -1978,7 +1982,7 @@ textarea { resize: vertical; min-height: 76px; }
   overflow-x:auto;
   -webkit-overflow-scrolling:touch;
   scrollbar-width:none;
-  position:sticky;top:60px;z-index:40;
+  position:sticky;top:52px;z-index:40;
 }
 .dash-tabbar::-webkit-scrollbar { display:none; }
 .dash-tab {
@@ -2081,8 +2085,15 @@ textarea { resize: vertical; min-height: 76px; }
   background: var(--card);
   border: 1px solid var(--border);
   border-radius: 12px;
-  padding: 14px 16px;
+  padding: 0;
   cursor: pointer;
+  overflow: hidden;
+}
+.bc-banner { position:relative;width:100%;height:52px;overflow:hidden;background:rgba(255,107,26,0.08); }
+.bc-banner-img { width:100%;height:100%;object-fit:cover;display:block;opacity:0.5;filter:blur(1.5px) saturate(1.3); }
+.bc-banner-placeholder { width:100%;height:100%;background:linear-gradient(135deg,rgba(232,53,10,0.1),rgba(255,149,0,0.06)); }
+.bc-banner-live { position:absolute;top:6px;right:8px;background:#E8350A;color:#fff;font-size:0.58rem;font-weight:800;padding:2px 6px;border-radius:4px;animation:livePulse 1.5s infinite; }
+.bc-inner { padding:12px 14px 14px; }
   margin-bottom: 10px;
   transition: border-color 0.15s, transform 0.15s, box-shadow 0.15s;
   position: relative;
@@ -2279,164 +2290,88 @@ textarea { resize: vertical; min-height: 76px; }
 <!-- ==================== PAGE: DOCS ==================== -->
 <div id="page-docs" class="page">
   <div class="container docs-wrap">
-
     <div class="docs-hero">
-      <div style="font-size:0.75rem;color:var(--orange);font-weight:700;text-transform:uppercase;letter-spacing:0.1em;margin-bottom:8px;">Built for Blaze API Hackathon</div>
+      <div style="font-size:0.75rem;color:var(--orange);font-weight:700;text-transform:uppercase;letter-spacing:0.1em;margin-bottom:8px;">Built for Blaze Builder Challenge</div>
       <h1>BlazDAO Docs</h1>
       <p style="color:var(--muted);max-width:520px;margin:0 auto;font-size:0.9rem;line-height:1.6;">The first Blaze-native clipping economy — connecting streamers and clippers through trustless smart contract escrow powered by $BLAZE.</p>
     </div>
-
     <div class="docs-nav">
-      <a href="#what">What is BlazDAO</a>
-      <a href="#how">How It Works</a>
-      <a href="#blaze-api">Blaze API Usage</a>
-      <a href="#contracts">Smart Contracts</a>
-      <a href="#testnet">Testnet Status</a>
-      <a href="#roadmap">Roadmap</a>
+      <a href="#" onclick="event.preventDefault();document.getElementById('doc-what').scrollIntoView({behavior:'smooth'})">What is BlazDAO</a>
+      <a href="#" onclick="event.preventDefault();document.getElementById('doc-how').scrollIntoView({behavior:'smooth'})">How It Works</a>
+      <a href="#" onclick="event.preventDefault();document.getElementById('doc-api').scrollIntoView({behavior:'smooth'})">Blaze API Usage</a>
+      <a href="#" onclick="event.preventDefault();document.getElementById('doc-contracts').scrollIntoView({behavior:'smooth'})">Smart Contracts</a>
+      <a href="#" onclick="event.preventDefault();document.getElementById('doc-testnet').scrollIntoView({behavior:'smooth'})">Testnet Status</a>
+      <a href="#" onclick="event.preventDefault();document.getElementById('doc-roadmap').scrollIntoView({behavior:'smooth'})">Roadmap</a>
     </div>
-
-    <!-- TESTNET BANNER -->
-    <div class="docs-testnet-banner" id="testnet">
-      <div style="font-size:1.2rem;flex-shrink:0;">⚠️</div>
+    <div class="docs-testnet-banner" id="doc-testnet">
+      <div style="font-size:1.2rem;flex-shrink:0;">&#x26A0;&#xFE0F;</div>
       <div>
         <div style="font-weight:800;margin-bottom:3px;">Currently on Avalanche Fuji Testnet</div>
         <div style="font-size:0.8rem;color:var(--muted);line-height:1.5;">BlazDAO is live on Fuji testnet with a mock $BLAZE token for testing. We plan to use Blaze Hackathon funding to move to Avalanche C-Chain mainnet with real $BLAZE — covering marketing, server infrastructure, storage, and community growth.</div>
       </div>
     </div>
-
-    <!-- WHAT IS BLAZEDAO -->
-    <div class="docs-section" id="what">
+    <div class="docs-section" id="doc-what">
       <div class="docs-section-title">What is BlazDAO?</div>
-      <div class="docs-card">
-        <p>BlazDAO is a decentralised clipping economy built natively on top of Blaze.stream. Streamers post $BLAZE-denominated bounties tied to their real Blaze VODs and streams. Clippers watch the stream, capture the best moment, post the clip to X (Twitter), and submit the link on-chain. The streamer (or community vote) picks the winning clip, and the escrowed $BLAZE pays out automatically via smart contract — no middlemen, no manual payments, no trust required.</p>
-      </div>
-      <div class="docs-card">
-        <h4>🎯 Problem it solves</h4>
-        <p>Streamers want their streams clipped and shared to grow their audience. Clippers want to be compensated for quality content creation. Today, both sides operate informally with no guarantee of payment and no structured incentive. BlazDAO puts bounties on-chain and pays clippers in $BLAZE the moment a winner is chosen.</p>
-      </div>
+      <div class="docs-card"><p>BlazDAO is a decentralised clipping economy built natively on top of Blaze.stream. Streamers post $BLAZE-denominated bounties tied to their real Blaze VODs and streams. Clippers watch the stream, capture the best moment, post the clip to X, and submit the link on-chain. The escrowed $BLAZE pays out automatically via smart contract — no middlemen, no manual payments, no trust required.</p></div>
+      <div class="docs-card"><h4>&#x1F3AF; Problem it solves</h4><p>Streamers want their streams clipped and shared to grow their audience. Clippers want to be compensated for quality content creation. Today both sides operate informally with no guarantee of payment. BlazDAO puts bounties on-chain and pays clippers in $BLAZE the moment a winner is chosen.</p></div>
+      <div class="docs-card"><h4>&#x1F525; Why Blaze?</h4><p>Blaze is the only web3-native streaming platform where creators earn on-chain and the audience is already crypto-native. $BLAZE as a reward currency is natural. We use Blaze OAuth for identity, Blaze channel APIs for live status and VOD data, and Blaze clips API for verification. BlazDAO is Blaze-first, not a Twitch clone bolted onto crypto.</p></div>
     </div>
-
-    <!-- HOW IT WORKS -->
-    <div class="docs-section" id="how">
+    <div class="docs-section" id="doc-how">
       <div class="docs-section-title">How It Works</div>
-      <div style="display:flex;flex-direction:column;gap:10px;">
-        ${[
-          ['1. Sign Up', 'Connect your EVM wallet (MetaMask, Core, or any WalletConnect-compatible wallet) and link your Blaze.stream account via OAuth. Your Blaze identity is verified server-side and stored in our backend — no NFT minting required.'],
-          ['2. Streamer Posts Bounty', 'Streamers lock $BLAZE in escrow via our smart contract. The bounty is tied to a specific Blaze VOD so clippers know exactly what to clip. Two modes: Streamer Picks (you choose the winner) or Community Vote (highest-voted clip wins).'],
-          ['3. Clippers Submit', 'Clippers clip the moment from the Blaze stream, post it to X, and submit the X link on-chain. The clip is recorded immutably and tied to the bounty.'],
-          ['4. Winner Picked', 'The streamer reviews submissions and picks the winner(s) — or in Community Vote mode, the contract resolves automatically once the deadline passes by tallying the highest-voted submission.'],
-          ['5. Automatic Payout', 'The winning clipper(s) call claim() on the contract and receive their $BLAZE share directly in their wallet. The contract enforces the split — no manual payment, no platform fee, no trust required.']
-        ].map(([title, desc]) => `<div class="docs-card"><h4>${title}</h4><p>${desc}</p></div>`).join('')}
-      </div>
+      <div class="docs-card"><h4>1. Sign Up</h4><p>Connect your EVM wallet and link your Blaze.stream account via OAuth. Your Blaze identity is verified server-side — username, avatar, and channel stats pulled directly from the Blaze API. No NFT minting required.</p></div>
+      <div class="docs-card"><h4>2. Streamer Posts Bounty</h4><p>Streamers lock $BLAZE in escrow via smart contract. The bounty is tied to a specific Blaze VOD (picked from real VOD history via the Blaze API). Two modes: Streamer Picks or Community Vote.</p></div>
+      <div class="docs-card"><h4>3. Clippers Submit</h4><p>Clippers watch the Blaze stream, clip the best moment, post it to X, and submit the X link on-chain. The submission is recorded immutably on Avalanche. Clippers see real live status and follower counts powered by the Blaze API.</p></div>
+      <div class="docs-card"><h4>4. Winner Picked</h4><p>Streamer reviews submissions and picks winner(s) with custom $BLAZE splits. In Community Vote mode, the contract resolves automatically once the deadline passes. Ties are handled on-chain.</p></div>
+      <div class="docs-card"><h4>5. Automatic Payout</h4><p>Winning clipper(s) call claim() and receive their $BLAZE directly in their wallet. Pull-payment pattern — no manual payment, no platform fee, no trust required.</p></div>
     </div>
-
-    <!-- BLAZE API USAGE -->
-    <div class="docs-section" id="blaze-api">
+    <div class="docs-section" id="doc-api">
       <div class="docs-section-title">Blaze API Usage</div>
-      <div class="docs-card" style="margin-bottom:14px;">
-        <p>BlazDAO integrates Blaze's developer API throughout the entire user journey — from identity verification to live stream data to community engagement. Below is every Blaze API endpoint we use and why.</p>
-      </div>
-
+      <div class="docs-card" style="margin-bottom:14px;"><p>BlazDAO integrates Blaze's developer API throughout the entire user journey — identity verification, live stream data, VOD history, clips, and channel stats. This is the core of our Blaze Builder Challenge entry.</p></div>
       <div class="docs-card">
-        <h4 style="margin-bottom:12px;">Authentication</h4>
-        <div class="docs-api-row">
-          <span class="docs-method docs-method-post">POST</span>
-          <div><div class="docs-api-path">blaze.stream/bapi/oauth2/generate-auth-url</div><div class="docs-api-desc">Generates a PKCE auth URL for user login. We use this to let streamers and clippers connect their Blaze account — this is the primary identity mechanism, replacing wallet-only sign-up.</div></div>
-        </div>
-        <div class="docs-api-row">
-          <span class="docs-method docs-method-post">POST</span>
-          <div><div class="docs-api-path">blaze.stream/bapi/oauth2/token</div><div class="docs-api-desc">Exchanges the auth code + code verifier for an access token and refresh token. Used immediately after the OAuth redirect completes.</div></div>
-        </div>
-        <div class="docs-api-row">
-          <span class="docs-method docs-method-post">POST</span>
-          <div><div class="docs-api-path">blaze.stream/bapi/oauth2/refresh</div><div class="docs-api-desc">Refreshes an expired access token silently in our backend. Access tokens expire after 1 hour — we auto-refresh so users never see an auth error.</div></div>
-        </div>
+        <h4 style="margin-bottom:12px;">Authentication &amp; Identity</h4>
+        <div class="docs-api-row"><span class="docs-method docs-method-post">POST</span><div><div class="docs-api-path">blaze.stream/bapi/oauth2/generate-auth-url</div><div class="docs-api-desc">Generates a PKCE auth URL for user login — the primary identity mechanism replacing wallet-only sign-up.</div></div></div>
+        <div class="docs-api-row"><span class="docs-method docs-method-post">POST</span><div><div class="docs-api-path">blaze.stream/bapi/oauth2/token</div><div class="docs-api-desc">Exchanges auth code + PKCE verifier for access + refresh tokens. Stored server-side in Supabase, never exposed to the frontend.</div></div></div>
+        <div class="docs-api-row"><span class="docs-method docs-method-post">POST</span><div><div class="docs-api-path">blaze.stream/bapi/oauth2/refresh</div><div class="docs-api-desc">Silently refreshes expired tokens in our backend. Auto-refresh means users never see an auth error mid-session.</div></div></div>
       </div>
-
       <div class="docs-card" style="margin-top:10px;">
-        <h4 style="margin-bottom:12px;">User & Channel Data</h4>
-        <div class="docs-api-row">
-          <span class="docs-method docs-method-get">GET</span>
-          <div><div class="docs-api-path">api.blaze.stream/v1/users/profile</div><div class="docs-api-desc">Fetches the authenticated user's profile — username, displayName, avatarUrl, user ID. Used to populate dashboard profiles, nav badges, and bounty card streamer info.</div></div>
-        </div>
-        <div class="docs-api-row">
-          <span class="docs-method docs-method-get">GET</span>
-          <div><div class="docs-api-path">api.blaze.stream/v1/channels/{channelId}/stats</div><div class="docs-api-desc">Follower count, subscriber count, total views. Shown on the dashboard overview and on each bounty card to give clippers social-proof context about the streamer they're clipping for.</div></div>
-        </div>
-        <div class="docs-api-row">
-          <span class="docs-method docs-method-get">GET</span>
-          <div><div class="docs-api-path">api.blaze.stream/v1/channels/{channelId}/live-stats</div><div class="docs-api-desc">Real-time live status, viewer count, stream title, game/category. Powers the pulsing LIVE badge on bounty cards and the overview dashboard — clippers can see instantly which streamers are live right now.</div></div>
-        </div>
-        <div class="docs-api-row">
-          <span class="docs-method docs-method-get">GET</span>
-          <div><div class="docs-api-path">api.blaze.stream/v1/channels/{channelId}/vods</div><div class="docs-api-desc">Fetches recent VODs for the authenticated streamer. Displayed in the dashboard overview so streamers can pick which VOD their bounty should target with one click.</div></div>
-        </div>
-        <div class="docs-api-row">
-          <span class="docs-method docs-method-get">GET</span>
-          <div><div class="docs-api-path">api.blaze.stream/v1/channels/clips?channelId=</div><div class="docs-api-desc">Fetches recent Blaze-native clips for a channel. Shown in the dashboard overview as channel activity. Planned use: verify that a submitted X clip legitimately originated from this Blaze channel.</div></div>
-        </div>
+        <h4 style="margin-bottom:12px;">Profile &amp; Channel Data</h4>
+        <div class="docs-api-row"><span class="docs-method docs-method-get">GET</span><div><div class="docs-api-path">api.blaze.stream/v1/users/profile</div><div class="docs-api-desc">Authenticated user profile — username, displayName, avatarUrl, user ID. Powers dashboard profile card, nav badge, and bounty card streamer info.</div></div></div>
+        <div class="docs-api-row"><span class="docs-method docs-method-get">GET</span><div><div class="docs-api-path">api.blaze.stream/v1/channels/{channelId}/stats</div><div class="docs-api-desc">Follower count, subscriber count, total views. Shown on dashboard overview and bounty cards as social proof.</div></div></div>
+        <div class="docs-api-row"><span class="docs-method docs-method-get">GET</span><div><div class="docs-api-path">api.blaze.stream/v1/channels/{channelId}/live-stats</div><div class="docs-api-desc">Real-time live status, viewer count, stream title. Powers the pulsing LIVE badge on bounty cards and live viewer count on overview.</div></div></div>
+        <div class="docs-api-row"><span class="docs-method docs-method-get">GET</span><div><div class="docs-api-path">api.blaze.stream/v1/channels/{channelId}/vods</div><div class="docs-api-desc">Recent VODs with titles, durations, thumbnails. Streamers pick which VOD their bounty targets — one click auto-fills the bounty form.</div></div></div>
+        <div class="docs-api-row"><span class="docs-method docs-method-get">GET</span><div><div class="docs-api-path">api.blaze.stream/v1/channels/clips?channelId=</div><div class="docs-api-desc">Recent Blaze clips — clipId, title, viewCount, previewImgUrl. Shown as channel activity. Planned: use clipId to verify a submitted X clip originated from this Blaze channel.</div></div></div>
       </div>
     </div>
-
-    <!-- SMART CONTRACTS -->
-    <div class="docs-section" id="contracts">
+    <div class="docs-section" id="doc-contracts">
       <div class="docs-section-title">Smart Contracts</div>
-      <div class="docs-card">
-        <h4>ClipDAOEscrow — Fuji Testnet</h4>
-        <div class="docs-code">0xc515aaB3b3BBDC2313dc72e1603E0E1ccB419Ee1</div>
-        <p>The core escrow contract. Handles bounty creation, clip submission, voting, winner selection, and pull-pattern payout. Built with ReentrancyGuard, Pausable, and Ownable (OpenZeppelin v5). ERC-20 native ($BLAZE), no native AVAX handling.</p>
-      </div>
-      <div class="docs-card" style="margin-top:10px;">
-        <h4>Mock $BLAZE Token — Fuji Testnet</h4>
-        <div class="docs-code">0x57BAEAC484A0F3d5694d81420402FE54D4fBfec7</div>
-        <p>Standard ERC-20 (18 decimals) used for testnet development. Includes a faucet() function with a 1-hour cooldown that mints 10,000 mBLAZE per claim. Will be replaced with the real $BLAZE token address on mainnet.</p>
-      </div>
+      <div class="docs-card"><h4>ClipDAOEscrow — Fuji Testnet</h4><div class="docs-code">0xc515aaB3b3BBDC2313dc72e1603E0E1ccB419Ee1</div><p>Core escrow contract. Bounty creation, clip submission, voting, winner selection, pull-pattern payout. Built with ReentrancyGuard, Pausable, Ownable (OpenZeppelin v5). ERC-20 native ($BLAZE).</p></div>
+      <div class="docs-card" style="margin-top:10px;"><h4>Mock $BLAZE Token — Fuji Testnet</h4><div class="docs-code">0x57BAEAC484A0F3d5694d81420402FE54D4fBfec7</div><p>Standard ERC-20 (18 decimals) for testnet. Includes faucet() with 1-hour cooldown minting 10,000 mBLAZE per claim. Will be replaced with real $BLAZE on mainnet.</p></div>
       <div class="docs-card" style="margin-top:10px;">
         <h4 style="margin-bottom:12px;">Contract Functions</h4>
         <div class="docs-fn-grid">
-          ${[
-            ['postBounty()', 'Lock $BLAZE in escrow, set VOD ref, description, mode, and deadline'],
-            ['submitClip()', 'Submit an X clip link on-chain, tied to a bounty'],
-            ['voteSubmission()', 'Community vote mode — one vote per wallet per bounty'],
-            ['pickWinner()', 'Streamer chooses winner(s) with custom $BLAZE splits'],
-            ['claim()', 'Pull-pattern: winner withdraws their $BLAZE reward'],
-            ['cancelBounty()', 'Streamer can cancel within 1hr grace period for full refund'],
-          ].map(([name, desc]) => `<div class="docs-fn-card"><div class="docs-fn-name">${name}</div><div class="docs-fn-desc">${desc}</div></div>`).join('')}
+          <div class="docs-fn-card"><div class="docs-fn-name">postBounty()</div><div class="docs-fn-desc">Lock $BLAZE in escrow, set VOD ref, description, mode, deadline</div></div>
+          <div class="docs-fn-card"><div class="docs-fn-name">submitClip()</div><div class="docs-fn-desc">Submit an X clip link on-chain tied to a bounty</div></div>
+          <div class="docs-fn-card"><div class="docs-fn-name">voteSubmission()</div><div class="docs-fn-desc">Community vote — one vote per wallet per bounty</div></div>
+          <div class="docs-fn-card"><div class="docs-fn-name">pickWinner()</div><div class="docs-fn-desc">Streamer picks winner(s) with custom $BLAZE splits</div></div>
+          <div class="docs-fn-card"><div class="docs-fn-name">claim()</div><div class="docs-fn-desc">Pull-pattern: winner withdraws their $BLAZE reward</div></div>
+          <div class="docs-fn-card"><div class="docs-fn-name">cancelBounty()</div><div class="docs-fn-desc">Cancel within 1hr grace period for full refund</div></div>
         </div>
       </div>
-      <div class="docs-card" style="margin-top:10px;">
-        <h4>Security Highlights</h4>
-        <p>Pull-payment pattern prevents reentrancy on all token transfers. SafeERC20 guards against non-standard ERC-20 behaviour. Splits must sum to exactly the bounty reward — no token lockup or over-allocation possible. Streamer cannot submit to or vote on their own bounty. One submission + one vote per wallet per bounty. Submission cap of 200 per bounty prevents gas-griefing DoS on winner resolution. Admin can only sweep funds that have sat unclaimed for 180+ days — can never touch an active bounty's escrow.</p>
-      </div>
+      <div class="docs-card" style="margin-top:10px;"><h4>Security Highlights</h4><p>Pull-payment on all transfers prevents reentrancy. SafeERC20 guards against non-standard tokens. Splits must sum exactly to bounty reward. Streamer cannot submit/vote on their own bounty. One submission + one vote per wallet. 200-submission cap prevents gas-griefing. Admin can only sweep funds unclaimed for 180+ days.</p></div>
     </div>
-
-    <!-- TESTNET & MAINNET -->
     <div class="docs-section">
-      <div class="docs-section-title">Testnet → Mainnet Plan</div>
-      <div class="docs-card">
-        <h4>Current state</h4>
-        <p>BlazDAO is fully functional on Avalanche Fuji testnet. Real user flows work end-to-end: Blaze OAuth login, bounty creation, clip submission, winner selection, and $BLAZE payout — all on testnet with mock tokens. The Blaze API integration is production-ready.</p>
-      </div>
-      <div class="docs-card" style="margin-top:10px;">
-        <h4>How Hackathon Funding Gets Us to Mainnet</h4>
-        <p>Marketing to bring streamers and clippers onto the platform, server infrastructure and storage costs (Vercel, Supabase, Render), tools and resources for scaling the backend, initial $BLAZE liquidity for the escrow contract, and community growth budget. We're applying to the Blaze Builder Challenge specifically because the prize provides exactly the bridge needed to move from a working testnet product to a live mainnet platform with real $BLAZE rewards for real clippers.</p>
-      </div>
+      <div class="docs-section-title">Testnet to Mainnet Plan</div>
+      <div class="docs-card"><h4>Current state</h4><p>BlazDAO is fully functional on Avalanche Fuji testnet. Real user flows work end-to-end: Blaze OAuth login, bounty creation, clip submission, winner selection, and $BLAZE payout — all on testnet with mock tokens. The Blaze API integration is production-ready.</p></div>
+      <div class="docs-card" style="margin-top:10px;"><h4>How Hackathon Funding Gets Us to Mainnet</h4><p>Marketing to bring streamers and clippers onto the platform, server infrastructure and storage costs (Vercel, Supabase, Render), tools and resources for scaling the backend, initial $BLAZE liquidity for the escrow contract, and community growth budget. We are applying to the Blaze Builder Challenge specifically because the prize provides exactly the bridge needed to move from a working testnet product to a live mainnet platform with real $BLAZE rewards for real clippers.</p></div>
     </div>
-
-    <!-- ROADMAP -->
-    <div class="docs-section" id="roadmap">
+    <div class="docs-section" id="doc-roadmap">
       <div class="docs-section-title">Roadmap</div>
-      <div style="display:flex;flex-direction:column;gap:8px;">
-        ${[
-          ['✅ Done', 'Blaze OAuth integration, ERC-20 escrow contract, bounty board, clip submission, streamer pick & community vote, $BLAZE payouts, dashboard with Blaze channel stats + VODs + clips, live status badges'],
-          ['🔄 In Progress', 'Blaze clip verification (confirm X clip came from a real Blaze VOD using clip API), streamer analytics page, mobile UX polish'],
-          ['📋 Planned', 'Mainnet launch with real $BLAZE, Blaze chat bot shoutouts (using hotemin bot pattern) when bounty won, clipper leaderboard, reputation system tied to Blaze channel stats'],
-          ['🌟 Future', 'Multi-platform clip support, DAO governance for platform parameters, tiered bounties with Blaze subscription gating, Blaze channel-exclusive bounties for subscribers only']
-        ].map(([phase, items]) => `<div class="docs-card"><h4>${phase}</h4><p>${items}</p></div>`).join('')}
-      </div>
+      <div class="docs-card"><h4>Done</h4><p>Blaze OAuth integration, ERC-20 escrow contract, bounty board, clip submission, streamer pick and community vote, $BLAZE payouts, dashboard with Blaze channel stats and VODs and clips, live status badges, streamer avatars on bounty cards.</p></div>
+      <div class="docs-card"><h4>In Progress</h4><p>Blaze clip verification using clipId, streamer analytics page, mobile UX polish, token refresh reliability improvements.</p></div>
+      <div class="docs-card"><h4>Planned</h4><p>Mainnet launch with real $BLAZE, Blaze chat bot shoutouts when a bounty is won, clipper leaderboard, reputation system tied to Blaze channel stats.</p></div>
+      <div class="docs-card"><h4>Future</h4><p>DAO governance for platform parameters, tiered bounties with Blaze subscription gating, channel-exclusive bounties for subscribers only, VOD-timestamped clip verification.</p></div>
     </div>
-
   </div>
 </div>
+
 </body>
-</html>
