@@ -1,4 +1,3 @@
-
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -133,8 +132,13 @@ async function connectWallet() {
     initContracts();
     updateNavWallet();
     await refreshBlazeBalance();
+    // If user already did Blaze OAuth before connecting wallet, link now
+    if (blazeProfile?.id || sessionStorage.getItem('pending_blaze_user_id')) {
+      await linkBlazeToWallet(userAddress);
+    }
     toast('Wallet connected');
     loadBounties();
+    checkBlazeStatus();
   } catch (e) {
     toast(friendlyError(e), 'error');
   }
@@ -258,7 +262,7 @@ async function handleBlazeCallback() {
   const code = params.get('code');
   if (!code) return;
   window.history.replaceState({}, '', window.location.pathname);
-  const wallet = sessionStorage.getItem('clipdao_wallet') || userAddress;
+  const wallet = sessionStorage.getItem('clipdao_wallet') || userAddress || null;
   try {
     const r = await fetch('/api/oauth/token', {
       method: 'POST',
@@ -277,6 +281,10 @@ async function handleBlazeCallback() {
       sessionStorage.removeItem('clipdao_wallet');
       const u = data.data || data;
       blazeProfile = { username: u.username || u.displayName, displayName: u.displayName, avatarUrl: u.avatarUrl, id: u.userId || u.id };
+
+      // Store blazeUserId so we can link it when wallet connects later
+      if (blazeProfile.id) sessionStorage.setItem('pending_blaze_user_id', blazeProfile.id);
+
       const pfBlaze = document.getElementById('pf-blazehandle');
       const pfUser  = document.getElementById('pf-username');
       if (pfBlaze && blazeProfile.username) pfBlaze.value = blazeProfile.username;
@@ -292,12 +300,36 @@ async function handleBlazeCallback() {
       const blazeBtn = document.getElementById('btn-blaze');
       if (blazeBtn) blazeBtn.style.display = 'none';
       toast(`🔥 Blaze connected: @${blazeProfile.username || 'account'}`, 'success');
+      // If wallet already connected, link immediately
+      if (userAddress) await linkBlazeToWallet(userAddress);
       checkBlazeStatus();
     } else {
       toast('Blaze token error: ' + JSON.stringify(data), 'error');
     }
   } catch(e) {
     toast('Blaze callback failed: ' + e.message, 'error');
+  }
+}
+
+// Link a Blaze account to a wallet address — called after both are available
+async function linkBlazeToWallet(wallet) {
+  const blazeUserId = blazeProfile?.id || sessionStorage.getItem('pending_blaze_user_id');
+  if (!blazeUserId || !wallet) return;
+  try {
+    initSupabase();
+    // Update the token row to add wallet FK
+    await db.from('blaze_oauth_tokens').update({ wallet: wallet.toLowerCase() }).eq('blaze_user_id', blazeUserId);
+    // Upsert the profile row with Blaze identity
+    await db.from('profiles').upsert({
+      wallet: wallet.toLowerCase(),
+      blaze_user_id: blazeUserId,
+      blaze_handle: blazeProfile?.username || null,
+      blaze_avatar: blazeProfile?.avatarUrl || null
+    }, { onConflict: 'wallet' });
+    sessionStorage.removeItem('pending_blaze_user_id');
+    console.log('[link] Blaze linked to wallet:', wallet.slice(0,8));
+  } catch(e) {
+    console.error('[link] error:', e.message);
   }
 }
 
@@ -345,23 +377,42 @@ const streamerCache = {};
 async function fetchStreamerProfile(wallet) {
   if (streamerCache[wallet]) return streamerCache[wallet];
   try {
-    const [profileRes, channelRes] = await Promise.allSettled([
-      fetch(`/api/blaze-status?wallet=${wallet}`).then(r=>r.json()),
-      fetch(`/api/blaze/channel?wallet=${wallet}`).then(r=>r.json())
-    ]);
-    const profile = profileRes.status==='fulfilled' ? profileRes.value : {};
-    const channel = channelRes.status==='fulfilled' ? channelRes.value : {};
-    streamerCache[wallet] = {
-      handle:      profile.handle || null,
-      avatar:      profile.avatar || null,
-      isLive:      channel.live?.isLive || false,
-      viewers:     channel.live?.viewers || 0,
-      liveTitle:   channel.live?.title || null,
-      followers:   channel.stats?.followers || 0,
-      subscribers: channel.stats?.subscribers || 0
+    // Always try blaze-status first — it reads Supabase directly, never 500s
+    const statusRes = await fetch(`/api/blaze-status?wallet=${wallet}`).then(r=>r.json()).catch(()=>({}));
+    const base = {
+      handle:      statusRes.handle || null,
+      avatar:      statusRes.avatar || null,
+      isLive:      false,
+      viewers:     0,
+      followers:   0,
+      subscribers: 0
     };
-  } catch(e) { streamerCache[wallet] = {}; }
-  return streamerCache[wallet];
+    // Try channel for richer data — but don't block the card on it
+    fetch(`/api/blaze/channel?wallet=${wallet}`)
+      .then(r => r.ok ? r.json() : null)
+      .then(ch => {
+        if (!ch || !ch.connected) return;
+        const enriched = {
+          handle:      ch.username      || base.handle,
+          avatar:      ch.avatarUrl     || base.avatar,
+          isLive:      ch.live?.isLive  || false,
+          viewers:     ch.live?.viewers || 0,
+          followers:   ch.stats?.followers    || 0,
+          subscribers: ch.stats?.subscribers  || 0
+        };
+        streamerCache[wallet] = enriched;
+        // Re-enrich any already-rendered cards with the richer data
+        document.querySelectorAll(`[data-bounty-id]`).forEach(card => {
+          if (card.dataset.streamer === wallet) enrichBountyCard(card.dataset.bountyId, wallet);
+        });
+      })
+      .catch(() => {});
+    streamerCache[wallet] = base;
+    return base;
+  } catch(e) {
+    streamerCache[wallet] = {};
+    return {};
+  }
 }
 
 // ==================== BOUNTIES ====================
@@ -437,7 +488,7 @@ function bountyCardHTML(b) {
   else            statusDot = '<span class="bc-dot bc-dot-cancelled"></span>';
 
   return `
-  <div class="bc" data-bounty-id="${b.id}" onclick="openBountyDetail(${b.id})">
+  <div class="bc" data-bounty-id="${b.id}" data-streamer="${b.streamer.toLowerCase()}" onclick="openBountyDetail(${b.id})">
     <div class="bc-banner" id="bc-banner-${b.id}"><div class="bc-banner-placeholder"></div></div>
     <div class="bc-inner">
       <div class="bc-header">
@@ -895,20 +946,23 @@ async function loadDashboard() {
   if (!userAddress) { showPage('home'); toast('Connect your wallet first', 'error'); return; }
   refreshBlazeBalance();
 
-  const [profile, channelData] = await Promise.all([
+  const [profile, statusData, channelData] = await Promise.all([
     loadProfile(),
-    fetch(`/api/blaze/channel?wallet=${userAddress}`).then(r=>r.json()).catch(()=>null)
+    fetch(`/api/blaze-status?wallet=${userAddress}`).then(r=>r.json()).catch(()=>null),
+    fetch(`/api/blaze/channel?wallet=${userAddress}`).then(r=>r.ok?r.json():null).catch(()=>null)
   ]);
+  // Merge: channel data wins if available, fall back to statusData then profile
+  const mergedChannel = channelData?.connected ? channelData : null;
 
-  const avatar    = channelData?.avatarUrl   || profile?.blaze_avatar || null;
-  const name      = channelData?.displayName || profile?.username || profile?.blaze_handle || 'Anonymous';
-  const handle    = channelData?.username    || profile?.blaze_handle || null;
+  const avatar    = mergedChannel?.avatarUrl   || statusData?.avatar  || profile?.blaze_avatar || null;
+  const name      = mergedChannel?.displayName || profile?.username   || statusData?.handle   || profile?.blaze_handle || 'Anonymous';
+  const handle    = mergedChannel?.username    || statusData?.handle  || profile?.blaze_handle || null;
   const role      = profile?.role || 'clipper';
-  const isLive    = channelData?.live?.isLive || false;
-  const viewers   = channelData?.live?.viewers || 0;
-  const liveTitle = channelData?.live?.title || '';
-  const followers = channelData?.stats?.followers || 0;
-  const subs      = channelData?.stats?.subscribers || 0;
+  const isLive    = mergedChannel?.live?.isLive  || false;
+  const viewers   = mergedChannel?.live?.viewers || 0;
+  const liveTitle = mergedChannel?.live?.title   || '';
+  const followers = mergedChannel?.stats?.followers    || 0;
+  const subs      = mergedChannel?.stats?.subscribers  || 0;
 
   // Overview profile card
   const summaryEl = document.getElementById('dash-profile-summary');
@@ -950,7 +1004,7 @@ async function loadDashboard() {
 
   // Show/hide no-blaze prompt — use Supabase profile as source of truth, not API
   const noBlaze = document.getElementById('dash-no-blaze');
-  if (noBlaze) noBlaze.style.display = (profile?.blaze_user_id || handle || blazeProfile?.username) ? 'none' : 'block';
+  if (noBlaze) noBlaze.style.display = (profile?.blaze_user_id || handle || statusData?.connected || blazeProfile?.username) ? 'none' : 'block';
 
   // Live stream chip
   const streamStatus = document.getElementById('dash-stream-status');
@@ -959,9 +1013,9 @@ async function loadDashboard() {
   // VODs section
   const vodsSection = document.getElementById('dash-vods');
   const vodsList    = document.getElementById('dash-vods-list');
-  if (vodsSection && vodsList && channelData?.vods?.length) {
+  if (vodsSection && vodsList && mergedChannel?.vods?.length) {
     vodsSection.style.display = 'block';
-    vodsList.innerHTML = channelData.vods.map(v => `
+    vodsList.innerHTML = mergedChannel.vods.map(v => `
       <div class="vod-row" onclick="${v.url ? `window.open('${escHtml(v.url)}','_blank')` : ''}">
         ${v.thumbnail
           ? `<img src="${escHtml(v.thumbnail)}" class="vod-thumb" onerror="this.style.background='rgba(255,107,26,0.08)';this.src=''" />`
@@ -977,9 +1031,9 @@ async function loadDashboard() {
   // Recent clips section
   const clipsSection = document.getElementById('dash-clips');
   const clipsList    = document.getElementById('dash-clips-list');
-  if (clipsSection && clipsList && channelData?.recentClips?.length) {
+  if (clipsSection && clipsList && mergedChannel?.recentClips?.length) {
     clipsSection.style.display = 'block';
-    clipsList.innerHTML = channelData.recentClips.map(c => `
+    clipsList.innerHTML = mergedChannel.recentClips.map(c => `
       <div class="vod-row" onclick="${c.url ? `window.open('${escHtml(c.url)}','_blank')` : ''}">
         ${c.thumbnail
           ? `<img src="${escHtml(c.thumbnail)}" class="vod-thumb" onerror="this.style.background='rgba(255,107,26,0.08)'"/>`
@@ -1081,7 +1135,7 @@ document.addEventListener('click', e => {
 const exposed = { connectWallet, disconnectWallet, showPage, switchTab, postBounty, submitClip, voteSubmission,
   confirmPickWinner, resolveCommunityVote, claimReward, cancelBounty, filterBounties, openBountyDetail,
   goBackFromBounty, setMobileActive, saveProfile, renderWinnerAmountInputs, autoDesc, setPbDuration,
-  fetchStreamerProfile, enrichBountyCard, loadProfileTab };
+  fetchStreamerProfile, enrichBountyCard, loadProfileTab, linkBlazeToWallet };
 Object.assign(window, exposed);
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -1537,7 +1591,7 @@ textarea { resize: vertical; min-height: 76px; }
       <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
       <span class="dash-text">Dashboard</span>
     </button>
-    <button id="btn-disconnect" class="btn btn-ghost btn-sm nav-desktop-only" style="display:none" onclick="disconnectWallet()" title="Disconnect">
+    <button id="btn-disconnect" class="btn btn-ghost btn-sm" style="display:none" onclick="disconnectWallet()" title="Disconnect">
       <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
     </button>
   </div>
