@@ -241,8 +241,15 @@ async function checkBlazeStatus() {
       if (!blazeProfile) blazeProfile = { username: data.handle, avatarUrl: data.avatar, id: null };
       else { blazeProfile.username = blazeProfile.username || data.handle; blazeProfile.avatarUrl = blazeProfile.avatarUrl || data.avatar; }
       if (badge) {
+<<<<<<< HEAD
         const av = data.avatar ? `<img src="${escHtml(data.avatar)}" style="width:18px;height:18px;border-radius:50%;object-fit:cover;border:1px solid rgba(255,107,26,0.4);" onerror="this.style.display='none'"/>` : '<svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>';
         badge.innerHTML = av + ' ' + escHtml(data.handle || 'Blaze');
+=======
+        badge.innerHTML = `${data.avatar
+          ? `<img src="${escHtml(data.avatar)}" style="width:18px;height:18px;border-radius:50%;object-fit:cover;border:1px solid rgba(255,107,26,0.4);" onerror="this.style.display='none'"/>`
+          : '<svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>'
+        } ${escHtml(data.handle || 'Blaze')}`;
+>>>>>>> 207c95f2d0dcdc4c16409957f19d08556e55308a
         badge.style.display = 'inline-flex';
       }
       if (btn) btn.style.display = 'none';
@@ -261,8 +268,11 @@ async function handleBlazeCallback() {
   const code = params.get('code');
   if (!code) return;
   window.history.replaceState({}, '', window.location.pathname);
+<<<<<<< HEAD
 
   // wallet may be null here — that's ok, token.js now saves without it
+=======
+>>>>>>> 207c95f2d0dcdc4c16409957f19d08556e55308a
   const wallet = sessionStorage.getItem('clipdao_wallet') || userAddress || null;
   try {
     const r = await fetch('/api/oauth/token', {
@@ -282,6 +292,7 @@ async function handleBlazeCallback() {
       sessionStorage.removeItem('blaze_state');
       sessionStorage.removeItem('blaze_verifier');
       sessionStorage.removeItem('clipdao_wallet');
+<<<<<<< HEAD
 
       const u = data.data || data;
       blazeProfile = {
@@ -300,7 +311,31 @@ async function handleBlazeCallback() {
       }
 
       updateBlazeUI();
+=======
+      const u = data.data || data;
+      blazeProfile = { username: u.username || u.displayName, displayName: u.displayName, avatarUrl: u.avatarUrl, id: u.userId || u.id };
+
+      // Store blazeUserId so we can link it when wallet connects later
+      if (blazeProfile.id) sessionStorage.setItem('pending_blaze_user_id', blazeProfile.id);
+
+      const pfBlaze = document.getElementById('pf-blazehandle');
+      const pfUser  = document.getElementById('pf-username');
+      if (pfBlaze && blazeProfile.username) pfBlaze.value = blazeProfile.username;
+      if (pfUser && !pfUser.value && blazeProfile.displayName) pfUser.value = blazeProfile.displayName;
+      const badge = document.getElementById('blaze-connected-badge');
+      if (badge) {
+        badge.innerHTML = `${blazeProfile.avatarUrl
+          ? `<img src="${escHtml(blazeProfile.avatarUrl)}" style="width:18px;height:18px;border-radius:50%;object-fit:cover;" onerror="this.style.display='none'"/>`
+          : '<svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>'
+        } ${escHtml(blazeProfile.username || 'Blaze')}`;
+        badge.style.display = 'inline-flex';
+      }
+      const blazeBtn = document.getElementById('btn-blaze');
+      if (blazeBtn) blazeBtn.style.display = 'none';
+>>>>>>> 207c95f2d0dcdc4c16409957f19d08556e55308a
       toast(`🔥 Blaze connected: @${blazeProfile.username || 'account'}`, 'success');
+      // If wallet already connected, link immediately
+      if (userAddress) await linkBlazeToWallet(userAddress);
       checkBlazeStatus();
     } else {
       console.error('[blaze] token error:', JSON.stringify(data));
@@ -312,6 +347,7 @@ async function handleBlazeCallback() {
   }
 }
 
+<<<<<<< HEAD
 // Update nav badge and form fields with blazeProfile data
 function updateBlazeUI() {
   if (!blazeProfile) return;
@@ -344,11 +380,31 @@ async function linkBlazeToWallet(wallet) {
     const data = await r.json();
     console.log('[link] result:', JSON.stringify(data));
     sessionStorage.removeItem('pending_blaze_user_id');
+=======
+// Link a Blaze account to a wallet address — called after both are available
+async function linkBlazeToWallet(wallet) {
+  const blazeUserId = blazeProfile?.id || sessionStorage.getItem('pending_blaze_user_id');
+  if (!blazeUserId || !wallet) return;
+  try {
+    initSupabase();
+    // Update the token row to add wallet FK
+    await db.from('blaze_oauth_tokens').update({ wallet: wallet.toLowerCase() }).eq('blaze_user_id', blazeUserId);
+    // Upsert the profile row with Blaze identity
+    await db.from('profiles').upsert({
+      wallet: wallet.toLowerCase(),
+      blaze_user_id: blazeUserId,
+      blaze_handle: blazeProfile?.username || null,
+      blaze_avatar: blazeProfile?.avatarUrl || null
+    }, { onConflict: 'wallet' });
+    sessionStorage.removeItem('pending_blaze_user_id');
+    console.log('[link] Blaze linked to wallet:', wallet.slice(0,8));
+>>>>>>> 207c95f2d0dcdc4c16409957f19d08556e55308a
   } catch(e) {
     console.error('[link] error:', e.message);
   }
 }
 
+<<<<<<< HEAD
 // Disconnect Blaze account
 async function disconnectBlaze() {
   if (!userAddress) return;
@@ -374,6 +430,8 @@ async function disconnectBlaze() {
   }
 }
 
+=======
+>>>>>>> 207c95f2d0dcdc4c16409957f19d08556e55308a
 async function refreshBlazeBalance() {
   if (!userAddress) return;
   try {
@@ -1176,7 +1234,11 @@ document.addEventListener('click', e => {
 const exposed = { connectWallet, disconnectWallet, showPage, switchTab, postBounty, submitClip, voteSubmission,
   confirmPickWinner, resolveCommunityVote, claimReward, cancelBounty, filterBounties, openBountyDetail,
   goBackFromBounty, setMobileActive, saveProfile, renderWinnerAmountInputs, autoDesc, setPbDuration,
+<<<<<<< HEAD
   fetchStreamerProfile, enrichBountyCard, loadProfileTab, linkBlazeToWallet, disconnectBlaze, updateBlazeUI };
+=======
+  fetchStreamerProfile, enrichBountyCard, loadProfileTab, linkBlazeToWallet };
+>>>>>>> 207c95f2d0dcdc4c16409957f19d08556e55308a
 Object.assign(window, exposed);
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -1919,6 +1981,7 @@ textarea { resize: vertical; min-height: 76px; }
         <label>Blaze handle <span style="font-size:0.72rem;color:var(--orange);">— auto-filled after connecting Blaze</span></label>
         <input type="text" id="pf-blazehandle" placeholder="auto-filled from Blaze account" readonly/>
       </div>
+<<<<<<< HEAD
       <div class="form-group" id="pf-blaze-actions">
         <label>Blaze Account</label>
         <div style="display:flex;gap:8px;flex-wrap:wrap;">
@@ -1929,6 +1992,8 @@ textarea { resize: vertical; min-height: 76px; }
           <button class="btn btn-ghost btn-sm" style="border-color:var(--red);color:var(--red);" onclick="disconnectBlaze()">Disconnect Blaze</button>
         </div>
       </div>
+=======
+>>>>>>> 207c95f2d0dcdc4c16409957f19d08556e55308a
       <div class="form-group">
         <label>I am a...</label>
         <div style="display:flex;gap:16px;">

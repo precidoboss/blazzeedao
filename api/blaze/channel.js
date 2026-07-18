@@ -1,82 +1,83 @@
-// api/blaze/channel.js  ->  GET /api/blaze/channel?wallet=0x...
-// Returns channel stats, live status, and recent VODs for a wallet's linked Blaze account.
-// Used by the bounty board to show streamer stats, live badge, and VOD picker.
-
+// api/blaze/channel.js -> GET /api/blaze/channel?wallet=0x...
+// Mirrors hotemin blazeHeaders pattern. Auto-refreshes expired tokens. Never 500s on partial data.
 const supabase = require('../_supabase.js');
+const BLAZE_API = 'https://api.blaze.stream/v1';
 
-async function blazeFetch(path, accessToken, clientId, clientSecret) {
-  const r = await fetch(`https://api.blaze.stream${path}`, {
-    headers: {
-      'authorization': `Bearer ${accessToken}`,
-      'client-id': clientId,
-      'secret': clientSecret,
-      'content-type': 'application/json'
-    }
-  });
-  if (!r.ok) throw new Error(`Blaze API ${path} returned ${r.status}`);
-  return r.json();
+function blazeHeaders(token) {
+  return { 'client-id': process.env.BLAZE_CLIENT_ID, 'authorization': `Bearer ${token}`, 'content-type': 'application/json', 'accept': 'application/json' };
+}
+
+async function blazeGet(path, token) {
+  const r = await fetch(`${BLAZE_API}${path}`, { headers: blazeHeaders(token) });
+  const text = await r.text();
+  if (!r.ok) throw new Error(`${r.status}: ${text.slice(0,120)}`);
+  return JSON.parse(text);
+}
+
+async function tryRefresh(row) {
+  if (!row.refresh_token) return null;
+  try {
+    const r = await fetch('https://blaze.stream/bapi/oauth2/refresh', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ clientId: process.env.BLAZE_CLIENT_ID, clientSecret: process.env.BLAZE_CLIENT_SECRET, refreshToken: row.refresh_token })
+    });
+    const data = await r.json();
+    if (!data.accessToken) return null;
+    await supabase.from('blaze_oauth_tokens').update({
+      access_token: data.accessToken,
+      refresh_token: data.refreshToken || row.refresh_token,
+      expires_at: new Date(Date.now() + 3600000).toISOString()
+    }).eq('wallet', row.wallet).catch(() => {});
+    return data.accessToken;
+  } catch (e) { console.error('[channel] refresh err:', e.message); return null; }
 }
 
 module.exports = async (req, res) => {
-  // Allow GET with wallet param OR blazeUserId param
+  res.setHeader('Access-Control-Allow-Origin', '*');
   const wallet = String(req.query.wallet || '').toLowerCase();
-  const blazeUserId = String(req.query.blazeUserId || '');
+  if (!wallet || !/^0x[a-f0-9]{40}$/.test(wallet)) return res.status(400).json({ error: 'valid wallet required' });
 
-  if (!wallet && !blazeUserId) return res.status(400).json({ error: 'wallet or blazeUserId required' });
+  const { data: row } = await supabase.from('blaze_oauth_tokens').select('*').eq('wallet', wallet).maybeSingle();
+  if (!row) return res.json({ connected: false });
 
+  let token = row.access_token;
+  const expired = row.expires_at && new Date(row.expires_at).getTime() < Date.now() + 60000;
+  if (expired) { const fresh = await tryRefresh(row); if (fresh) token = fresh; }
+
+  let profile = {};
   try {
-    // Get the stored token for this wallet
-    let tokenQuery = supabase.from('blaze_oauth_tokens').select('*');
-    if (wallet) tokenQuery = tokenQuery.eq('wallet', wallet);
-    else tokenQuery = tokenQuery.eq('blaze_user_id', blazeUserId);
-
-    const { data: tokenRow } = await tokenQuery.maybeSingle();
-    if (!tokenRow) return res.json({ connected: false });
-
-    const { access_token, blaze_user_id, blaze_username } = tokenRow;
-    const cid = process.env.BLAZE_CLIENT_ID;
-    const sec = process.env.BLAZE_CLIENT_SECRET;
-
-    // Fetch all three in parallel — channel stats, live status, recent VODs
-    const [statsRes, liveRes, vodsRes] = await Promise.allSettled([
-      blazeFetch(`/v1/channels/${blaze_username}/stats`, access_token, cid, sec),
-      blazeFetch(`/v1/channels/${blaze_username}/live-stats`, access_token, cid, sec),
-      blazeFetch(`/v1/channels/${blaze_username}/vods?orderBy=most_recent&limit=5`, access_token, cid, sec)
-    ]);
-
-    const stats = statsRes.status === 'fulfilled' ? statsRes.value : {};
-    const live  = liveRes.status  === 'fulfilled' ? liveRes.value  : {};
-    const vods  = vodsRes.status  === 'fulfilled' ? vodsRes.value  : {};
-
-    res.json({
-      connected: true,
-      blazeUserId: blaze_user_id,
-      username: blaze_username,
-      stats: {
-        followers:   stats.followersCount || stats.followers || 0,
-        subscribers: stats.subscribersCount || stats.subscribers || 0,
-        totalViews:  stats.totalViews || 0
-      },
-      live: {
-        isLive:   !!(live.isLive || live.is_live || live.live),
-        viewers:  live.viewerCount || live.viewers || 0,
-        title:    live.title || null,
-        game:     live.game?.name || live.category?.name || null,
-        startedAt: live.startedAt || live.started_at || null
-      },
-      vods: Array.isArray(vods.rows || vods.data || vods)
-        ? (vods.rows || vods.data || vods).slice(0, 5).map(v => ({
-            id:        v.id || v.vodId,
-            title:     v.title,
-            duration:  v.duration,
-            thumbnail: v.thumbnailUrl || v.previewImgUrl || null,
-            url:       v.url || v.vodUrl || null,
-            createdAt: v.createdAt || null
-          }))
-        : []
-    });
+    const raw = await blazeGet('/users/profile', token);
+    profile = raw.data || raw;
+    console.log('[channel] user:', profile.username, 'id:', profile.id);
   } catch (e) {
-    console.error('[BLAZE CHANNEL]', e.message);
-    res.status(500).json({ error: e.message });
+    console.error('[channel] profile err:', e.message);
+    profile = { id: row.blaze_user_id, username: row.blaze_username, displayName: row.blaze_username, avatarUrl: null };
   }
+
+  const channelId = profile.id || profile.userId || row.blaze_user_id;
+  const username = profile.username || row.blaze_username || null;
+  const avatar = profile.avatarUrl || null;
+  const display = profile.displayName || username;
+
+  if (username || avatar) {
+    supabase.from('profiles').update({ blaze_handle: username, blaze_avatar: avatar }).eq('wallet', wallet).catch(() => {});
+    if (username && !row.blaze_username) supabase.from('blaze_oauth_tokens').update({ blaze_username: username }).eq('wallet', wallet).catch(() => {});
+  }
+
+  let stats = {}, live = {}, vods = [], clips = [];
+  if (channelId) {
+    const [sR, lR, vR, cR] = await Promise.allSettled([
+      blazeGet(`/channels/${channelId}/stats`, token),
+      blazeGet(`/channels/${channelId}/live-stats`, token),
+      blazeGet(`/channels/${channelId}/vods?orderBy=most_recent&limit=5`, token),
+      blazeGet(`/channels/clips?channelId=${channelId}&limit=5&orderBy=most_recent`, token)
+    ]);
+    if (sR.status === 'fulfilled') { const d = sR.value.data || sR.value; stats = { followers: d.followersCount || d.followers || 0, subscribers: d.subscribersCount || d.subscribers || 0, totalViews: d.totalViews || 0 }; }
+    if (lR.status === 'fulfilled') { const d = lR.value.data || lR.value; live = { isLive: !!(d.isLive || d.is_live || d.live), viewers: d.viewerCount || d.viewers || 0, title: d.title || null, game: d.game?.name || d.category?.name || null }; }
+    if (vR.status === 'fulfilled') { const rows = vR.value.data || vR.value.rows || vR.value.vods || vR.value || []; vods = (Array.isArray(rows) ? rows : []).slice(0, 5).map(v => ({ id: v.id, title: v.title, duration: v.duration, thumbnail: v.thumbnailUrl || v.previewImgUrl || null, url: v.url || v.vodUrl || (username ? `https://blaze.stream/${username}/videos/${v.id}` : null) })); }
+    if (cR.status === 'fulfilled') { const rows = cR.value.data || cR.value.rows || cR.value.clips || cR.value || []; clips = (Array.isArray(rows) ? rows : []).slice(0, 5).map(c => ({ id: c.id || c.clipId, title: c.title, views: c.viewCount || c.views || 0, thumbnail: c.previewImgUrl || c.thumbnailUrl || null, url: c.clipUrl || c.url || null })); }
+    [sR, lR, vR, cR].forEach((r, i) => { if (r.status === 'rejected') console.log('[channel] endpoint', i, 'skipped:', r.reason?.message?.slice(0, 80)); });
+  }
+
+  res.json({ connected: true, channelId, username, displayName: display, avatarUrl: avatar, stats, live, vods, recentClips: clips });
 };
