@@ -1,0 +1,45 @@
+// api/link-wallet.js -> POST /api/link-wallet
+// Called from the frontend when a user has both a Blaze account and a wallet
+// but they weren't linked yet (e.g. Blaze OAuth done before wallet connect).
+
+const supabase = require('./_supabase.js');
+
+module.exports = async (req, res) => {
+  if (req.method !== 'POST') return res.status(405).end();
+  const { blazeUserId, wallet } = req.body;
+
+  if (!blazeUserId || !wallet) return res.status(400).json({ error: 'blazeUserId and wallet required' });
+  const cleanWallet = wallet.toLowerCase();
+
+  console.log('[link-wallet] linking', blazeUserId, '->', cleanWallet);
+
+  // Get the token row to find username/avatar
+  const { data: tokenRow, error: tokenErr } = await supabase
+    .from('blaze_oauth_tokens')
+    .select('blaze_username, blaze_user_id')
+    .eq('blaze_user_id', blazeUserId)
+    .maybeSingle();
+
+  if (tokenErr) console.error('[link-wallet] token lookup error:', tokenErr.message);
+
+  // Update the token row with the wallet
+  const { error: updateErr } = await supabase
+    .from('blaze_oauth_tokens')
+    .update({ wallet: cleanWallet })
+    .eq('blaze_user_id', blazeUserId);
+
+  if (updateErr) console.error('[link-wallet] update error:', updateErr.message);
+
+  // Upsert the profile row
+  const { error: profileErr } = await supabase
+    .from('profiles')
+    .upsert({
+      wallet:        cleanWallet,
+      blaze_user_id: blazeUserId,
+      blaze_handle:  tokenRow?.blaze_username || null
+    }, { onConflict: 'wallet' });
+
+  if (profileErr) console.error('[link-wallet] profile error:', profileErr.message);
+
+  res.json({ ok: true, wallet: cleanWallet, blazeUserId });
+};

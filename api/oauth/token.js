@@ -1,13 +1,11 @@
-// api/oauth/token.js  ->  POST /api/oauth/token
-// Exchanges the auth code for an access token and saves the Blaze identity to Supabase.
-
+// api/oauth/token.js
 const supabase = require('../_supabase.js');
 
 module.exports = async (req, res) => {
   if (req.method !== 'POST') return res.status(405).end();
   const { code, codeVerifier, redirectUri, wallet } = req.body;
   if (!code) return res.status(400).json({ error: 'code required' });
-  if (!process.env.BLAZE_CLIENT_SECRET) return res.status(500).json({ error: 'BLAZE_CLIENT_SECRET not set in Vercel env vars' });
+  if (!process.env.BLAZE_CLIENT_SECRET) return res.status(500).json({ error: 'BLAZE_CLIENT_SECRET not set' });
 
   try {
     const r = await fetch('https://blaze.stream/bapi/oauth2/token', {
@@ -16,40 +14,45 @@ module.exports = async (req, res) => {
       body: JSON.stringify({
         clientId:     process.env.BLAZE_CLIENT_ID,
         clientSecret: process.env.BLAZE_CLIENT_SECRET,
-        code,
-        codeVerifier,
-        redirectUri,
+        code, codeVerifier, redirectUri,
         grantType: 'authorization_code'
       })
     });
     const data = await r.json();
-    console.log('[OAUTH] token response:', r.status, JSON.stringify(data).slice(0, 120));
+    console.log('[token] status:', r.status, 'userId:', data.userId, 'username:', data.username, 'wallet:', wallet || 'null');
 
-    // If we got a real token back and the frontend sent a wallet address,
-    // save the Blaze identity to Supabase and link it to the wallet.
-    if (data.accessToken && wallet) {
-      const cleanWallet = wallet.toLowerCase();
+    if (data.accessToken) {
+      const cleanWallet = wallet ? wallet.toLowerCase() : null;
 
-      await supabase.from('blaze_oauth_tokens').upsert({
+      // ALWAYS save the token, even without a wallet — use blaze_user_id as primary key
+      const tokenUpsert = await supabase.from('blaze_oauth_tokens').upsert({
         blaze_user_id:  data.userId,
         blaze_username: data.username || data.displayName || null,
         access_token:   data.accessToken,
         refresh_token:  data.refreshToken || null,
         expires_at:     new Date(Date.now() + 3600 * 1000).toISOString(),
-        wallet:         cleanWallet
+        wallet:         cleanWallet  // may be null — gets linked later via /api/link-wallet
       }, { onConflict: 'blaze_user_id' });
 
-      await supabase.from('profiles').upsert({
-        wallet:         cleanWallet,
-        blaze_user_id:  data.userId,
-        blaze_handle:   data.username || data.displayName || null,
-        blaze_avatar:   data.avatarUrl || null
-      }, { onConflict: 'wallet' });
+      if (tokenUpsert.error) console.error('[token] blaze_oauth_tokens upsert error:', tokenUpsert.error.message);
+
+      // Only upsert profiles if we have a wallet
+      if (cleanWallet) {
+        const profileUpsert = await supabase.from('profiles').upsert({
+          wallet:        cleanWallet,
+          blaze_user_id: data.userId,
+          blaze_handle:  data.username || data.displayName || null,
+          blaze_avatar:  data.avatarUrl || null
+        }, { onConflict: 'wallet' });
+
+        if (profileUpsert.error) console.error('[token] profiles upsert error:', profileUpsert.error.message);
+      }
     }
 
+    // Return everything the frontend needs
     res.json(data);
   } catch (e) {
-    console.error('[OAUTH] token error:', e.message);
+    console.error('[token] error:', e.message);
     res.status(500).json({ error: e.message });
   }
 };
