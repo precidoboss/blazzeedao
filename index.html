@@ -50,7 +50,11 @@ const ERC20_ABI = [
   "function allowance(address owner, address spender) view returns (uint256)",
   "function balanceOf(address account) view returns (uint256)",
   "function decimals() view returns (uint8)",
-  "function symbol() view returns (string)"
+  "function symbol() view returns (string)",
+  "function faucet()",
+  "function lastFaucetClaim(address) view returns (uint256)",
+  "function FAUCET_COOLDOWN() view returns (uint256)",
+  "function FAUCET_AMOUNT() view returns (uint256)"
 ];
 
 // Mode / Status enums mirrored from the contract
@@ -134,6 +138,7 @@ async function connectWallet() {
     initContracts();
     updateNavWallet();
     await refreshBlazeBalance();
+    updateFaucetUI();
     // If user already did Blaze OAuth before connecting wallet, link now
     if (blazeProfile?.id || sessionStorage.getItem('pending_blaze_user_id')) {
       await linkBlazeToWallet(userAddress);
@@ -387,6 +392,70 @@ async function refreshBlazeBalance() {
     const formatted = parseFloat(ethers.formatUnits(bal, blazeDecimals)).toLocaleString(undefined,{maximumFractionDigits:2});
     ['blaze-balance','blaze-balance-dash'].forEach(id => { const el=document.getElementById(id); if(el) el.textContent=formatted; });
   } catch(e) { console.warn('Balance fetch:', e.message); }
+}
+
+// ==================== TESTNET $BLAZE FAUCET ====================
+// MockBlaze (Fuji only) lets anyone mint 10,000 mBLAZE once per hour via
+// faucet() — no allowlist, no eligibility check beyond the cooldown.
+let faucetCooldownTimer = null;
+
+async function updateFaucetUI() {
+  if (!userAddress) return;
+  const reader = blazeRead || new ethers.Contract(BLAZE_ADDRESS, ERC20_ABI, new ethers.JsonRpcProvider(FUJI_RPC));
+  const btns = [...document.querySelectorAll('.faucet-claim-btn')];
+  const notes = [...document.querySelectorAll('.faucet-note')];
+  if (btns.length === 0) return;
+
+  if (faucetCooldownTimer) { clearInterval(faucetCooldownTimer); faucetCooldownTimer = null; }
+
+  try {
+    const [lastClaim, cooldown, amount] = await Promise.all([
+      reader.lastFaucetClaim(userAddress),
+      reader.FAUCET_COOLDOWN(),
+      reader.FAUCET_AMOUNT().catch(() => ethers.parseUnits('10000', 18))
+    ]);
+    const retryAt = Number(lastClaim) + Number(cooldown);
+    const amountFmt = parseFloat(ethers.formatUnits(amount, blazeDecimals || 18)).toLocaleString();
+
+    const render = () => {
+      const now = Math.floor(Date.now()/1000);
+      const diff = retryAt - now;
+      if (diff > 0) {
+        const h = Math.floor(diff/3600), m = Math.floor((diff%3600)/60), s = diff%60;
+        const label = h > 0 ? `⏳ Available in ${h}h ${m}m` : `⏳ Available in ${m}m ${s}s`;
+        btns.forEach(b => { b.disabled = true; b.textContent = label; });
+        notes.forEach(n => n.textContent = `You can claim again in ${h > 0 ? h+'h '+m+'m' : m+'m '+s+'s'} — Fuji testnet only.`);
+      } else {
+        if (faucetCooldownTimer) { clearInterval(faucetCooldownTimer); faucetCooldownTimer = null; }
+        btns.forEach(b => { b.disabled = false; b.textContent = `🚰 Get ${amountFmt} Testnet $BLAZE`; });
+        notes.forEach(n => n.textContent = 'Free once per hour — Fuji testnet only, no real value.');
+      }
+    };
+    render();
+    if (retryAt > Math.floor(Date.now()/1000)) faucetCooldownTimer = setInterval(render, 1000);
+  } catch(e) {
+    btns.forEach(b => { b.disabled = false; b.textContent = '🚰 Get Testnet $BLAZE'; });
+  }
+}
+
+async function claimFaucet() {
+  if (!userAddress) { toast('Connect wallet first', 'error'); return; }
+  if (!blaze) { toast('Wallet not ready — reconnect', 'error'); return; }
+  const btns = [...document.querySelectorAll('.faucet-claim-btn')];
+  btns.forEach(b => b.disabled = true);
+  try {
+    setTxStatus('tx-faucet', '📝 Confirm in wallet…', 'info');
+    const tx = await blaze.faucet();
+    setTxStatus('tx-faucet', '⏳ Confirming on-chain…', 'info');
+    await tx.wait(1);
+    setTxStatus('tx-faucet', '✅ Testnet $BLAZE sent to your wallet!', 'success');
+    toast('🚰 Testnet $BLAZE claimed!');
+    refreshBlazeBalance();
+    updateFaucetUI();
+  } catch(e) {
+    setTxStatus('tx-faucet', friendlyError(e), 'error');
+    updateFaucetUI();
+  }
 }
 
 // ==================== PROFILE (Supabase only — no NFT) ====================
@@ -1417,6 +1486,7 @@ function goBackFromBounty() { showPage(prevPage || 'bounties'); }
 async function loadDashboard() {
   if (!userAddress) { showPage('home'); toast('Connect your wallet first', 'error'); return; }
   refreshBlazeBalance();
+  updateFaucetUI();
 
   const [profile, statusData, channelData] = await Promise.all([
     loadProfile(),
@@ -1713,7 +1783,7 @@ const exposed = { connectWallet, disconnectWallet, showPage, switchTab, postBoun
   goBackFromBounty, setMobileActive, saveProfile, renderWinnerAmountInputs, autoDesc, setPbDuration,
   fetchStreamerProfile, enrichBountyCard, loadProfileTab, linkBlazeToWallet, disconnectBlaze, updateBlazeUI,
   loadPlatformStats, enrichSubmissionCard, setReqMode, addReqItem, loadPbXHandle, shareBounty, postComment,
-  toggleFlagBox, submitFlag, loadActivityFeed };
+  toggleFlagBox, submitFlag, loadActivityFeed, claimFaucet };
 Object.assign(window, exposed);
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -2293,6 +2363,14 @@ textarea { resize: vertical; min-height: 76px; }
             <div class="dash-stat-label">$BLAZE Balance</div>
           </div>
         </div>
+        <div class="dash-stat-card faucet-card">
+          <div style="font-size:1.3rem;">🚰</div>
+          <div style="flex:1;">
+            <button class="btn btn-primary btn-sm faucet-claim-btn" onclick="claimFaucet()">🚰 Get Testnet $BLAZE</button>
+            <div class="faucet-note" style="font-size:0.62rem;color:var(--muted);margin-top:5px;line-height:1.3;">Free once per hour — Fuji testnet only, no real value.</div>
+            <div class="tx-status" id="tx-faucet"></div>
+          </div>
+        </div>
         <div class="dash-stat-card" id="dash-followers-card" style="display:none;">
           <div style="font-size:1.3rem;">👥</div>
           <div>
@@ -2404,6 +2482,10 @@ textarea { resize: vertical; min-height: 76px; }
             <button class="pb-quick-btn" onclick="document.getElementById('pb-reward').value=1000">1,000</button>
             <button class="pb-quick-btn" onclick="document.getElementById('pb-reward').value=5000">5,000</button>
             <button class="pb-quick-btn" onclick="document.getElementById('pb-reward').value=10000">10K</button>
+          </div>
+          <div class="pb-faucet-inline">
+            <button class="btn btn-ghost btn-sm faucet-claim-btn" onclick="claimFaucet()">🚰 Get Testnet $BLAZE</button>
+            <span class="faucet-note">Free once per hour — Fuji testnet only, no real value.</span>
           </div>
         </div>
       </div>
@@ -2815,6 +2897,11 @@ textarea { resize: vertical; min-height: 76px; }
   font-size:0.68rem;color:var(--muted);
   text-transform:uppercase;letter-spacing:0.05em;margin-top:2px;
 }
+.faucet-card { grid-column:span 2;align-items:flex-start; }
+@media (max-width:480px) { .faucet-card { grid-column:1/-1; } }
+.faucet-claim-btn { white-space:nowrap; }
+.pb-faucet-inline { display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:8px;padding:8px 10px;background:rgba(255,107,26,0.06);border:1px dashed rgba(255,107,26,0.3);border-radius:8px; }
+.pb-faucet-inline .faucet-note { font-size:0.68rem;color:var(--muted); }
 
 /* ── VOD ROWS ── */
 .vod-row {
