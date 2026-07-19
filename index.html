@@ -414,7 +414,51 @@ async function loadProfile() {
   return data;
 }
 
-// Cache of streamer profile data: wallet -> {username, blaze_handle, blaze_avatar, isLive, viewers}
+// ==================== PLATFORM STATS ====================
+async function loadPlatformStats() {
+  try {
+    const reader = escrowRead || new ethers.Contract(ESCROW_ADDRESS, ESCROW_ABI, new ethers.JsonRpcProvider(FUJI_RPC));
+    const count = Number(await reader.bountyCount());
+    if (count === 0) return;
+
+    // Read all bounties in parallel
+    const all = await Promise.all(Array.from({length:count},(_,i)=>reader.getBounty(i)));
+    const bounties = all.map((b,i) => ({
+      id:i, streamer:b[0], reward:b[1], status:b[5], submissionCount:b[8]
+    }));
+
+    const openBounties = bounties.filter(b => Number(b.status) === STATUS_OPEN);
+    const resolvedBounties = bounties.filter(b => Number(b.status) === STATUS_RESOLVED);
+
+    // $BLAZE currently locked = sum of open bounty rewards
+    const blazeLocked = openBounties.reduce((sum,b) => sum + BigInt(b.reward), 0n);
+
+    // $BLAZE paid out = sum of resolved bounty rewards (approximate — actual is per-claim)
+    const blazePaid = resolvedBounties.reduce((sum,b) => sum + BigInt(b.reward), 0n);
+
+    // Unique clippers = unique clipper addresses across all submissions
+    // (sampling — fetch submissions only for resolved+open to save RPC calls)
+    const clippers = new Set();
+    const streamers = new Set(bounties.map(b => b.streamer.toLowerCase()));
+    const subCounts = bounties.reduce((sum,b) => sum + Number(b.submissionCount), 0);
+
+    // Update UI
+    const fmt = (wei) => {
+      const n = parseFloat(ethers.formatUnits(wei, blazeDecimals || 18));
+      if (n >= 1000000) return (n/1000000).toFixed(1)+'M';
+      if (n >= 1000) return (n/1000).toFixed(1)+'K';
+      return n.toLocaleString(undefined,{maximumFractionDigits:0});
+    };
+
+    const set = (id, val) => { const el = document.getElementById(id); if(el) el.textContent = val; };
+    set('stat-bounties',     openBounties.length);
+    set('stat-blaze-locked', fmt(blazeLocked));
+    set('stat-total-paid',   fmt(blazePaid));
+    set('stat-clippers',     subCounts); // total clips submitted (unique clippers needs per-sub fetch)
+    set('dash-open-bounties', openBounties.length);
+
+  } catch(e) { console.warn('[stats]', e.message); }
+}
 const streamerCache = {};
 
 async function fetchStreamerProfile(wallet) {
@@ -843,22 +887,100 @@ async function enrichBountyDetailStreamer(bountyId, wallet, isStreamer) {
     </div>`;
 }
 
+// ==================== CLIP EMBED + EXTRACTOR (from moochrunner) ====================
+function extractTweetId(url) {
+  if (!url) return null;
+  const m = url.match(/(?:twitter\.com|x\.com)\/[^/]+\/status(?:es)?\/(\d+)/);
+  return m ? m[1] : null;
+}
+
+function renderClipEmbed(link) {
+  if (!link) return '<div style="color:var(--muted);font-size:0.85rem;padding:10px;">No clip link</div>';
+  const tweetId = extractTweetId(link);
+  if (tweetId) {
+    const uid = 'tw_' + tweetId + '_' + Math.random().toString(36).slice(2,7);
+    setTimeout(() => {
+      const el = document.getElementById(uid);
+      if (!el) return;
+      if (window.twttr?.widgets) {
+        window.twttr.widgets.createTweet(tweetId, el, { theme:'dark', dnt:true, align:'center' });
+      } else if (!document.getElementById('twitter-wjs')) {
+        const s = document.createElement('script');
+        s.id = 'twitter-wjs'; s.charset = 'utf-8';
+        s.src = 'https://platform.twitter.com/widgets.js';
+        s.onload = () => {
+          const el2 = document.getElementById(uid);
+          if (el2 && window.twttr?.widgets) window.twttr.widgets.createTweet(tweetId, el2, { theme:'dark', dnt:true, align:'center' });
+        };
+        document.head.appendChild(s);
+      }
+    }, 150);
+    return `<div id="${uid}" class="clip-embed-tweet"><div style="color:var(--muted);font-size:0.78rem;">Loading clip…</div></div>`;
+  }
+  // Fallback chip for non-X links
+  return `<div class="clip-embed-fallback"><svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-4.714-6.231-5.401 6.231H2.742l7.73-8.835L1.254 2.25H8.08l4.258 5.636 5.906-5.636z"/></svg><a href="${escHtml(link)}" target="_blank" rel="noreferrer" class="clip-embed-link">${escHtml(link.replace('https://',''))}</a><a href="${escHtml(link)}" target="_blank" rel="noreferrer" class="btn btn-ghost btn-sm">↗ Open</a></div>`;
+}
+
+// Cache of clipper profiles by wallet: wallet -> {handle, avatar}
+const clipperCache = {};
+async function loadClipperProfile(wallet) {
+  if (clipperCache[wallet]) return clipperCache[wallet];
+  try {
+    const r = await fetch(`/api/blaze-status?wallet=${wallet}`);
+    const d = await r.json();
+    clipperCache[wallet] = { handle: d.handle || null, avatar: d.avatar || null };
+  } catch(e) { clipperCache[wallet] = {}; }
+  return clipperCache[wallet];
+}
+
+function timeAgo(timestamp) {
+  if (!timestamp) return '';
+  const diff = Math.floor(Date.now()/1000) - Number(timestamp);
+  if (diff < 60)   return 'just now';
+  if (diff < 3600) return Math.floor(diff/60)+'m ago';
+  if (diff < 86400) return Math.floor(diff/3600)+'h ago';
+  return Math.floor(diff/86400)+'d ago';
+}
+
+async function enrichSubmissionCard(wallet, cardId) {
+  const profile = await loadClipperProfile(wallet);
+  const avatarEl = document.getElementById('sub-av-'+cardId);
+  const nameEl   = document.getElementById('sub-name-'+cardId);
+  if (!avatarEl || !nameEl) return;
+  if (profile.avatar) {
+    avatarEl.innerHTML = `<img src="${escHtml(profile.avatar)}" style="width:100%;height:100%;object-fit:cover;border-radius:50%;" onerror="this.parentElement.textContent=this.parentElement.dataset.fallback"/>`;
+    avatarEl.dataset.fallback = wallet.slice(0,2);
+  }
+  if (profile.handle) {
+    nameEl.textContent = '@' + profile.handle;
+    nameEl.style.color = 'var(--orange)';
+  }
+}
+
 function submissionHTML(s, i, bountyId, b, isStreamer, isCommunityVote, isOpen, deadlinePassed) {
   const clipperShort = s.clipper.slice(0,6)+'…'+s.clipper.slice(-4);
   const isMyClip = userAddress && s.clipper.toLowerCase() === userAddress.toLowerCase();
+  const cardId = `${bountyId}-${i}`;
+  const embedHTML = renderClipEmbed(s.clipLink);
+  // Enrich clipper profile async after render
+  setTimeout(() => enrichSubmissionCard(s.clipper, cardId), 0);
+
   return `
   <div class="sub-card ${s.isWinner ? 'sub-card-winner' : ''}" data-sub-index="${i}">
     <div class="sub-card-header">
-      <div class="sub-num">${i+1}</div>
+      <div class="sub-av" id="sub-av-${cardId}">${i+1}</div>
       <div style="flex:1;min-width:0;">
-        <a href="${escHtml(s.clipLink)}" target="_blank" rel="noreferrer" class="sub-link">${escHtml(s.clipLink.replace('https://',''))}</a>
-        <div class="sub-card-meta">
-          <span>👤 ${clipperShort}${isMyClip?' <strong style="color:var(--orange);">(you)</strong>':''}</span>
+        <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:3px;">
+          <span class="sub-clipper-name" id="sub-name-${cardId}">${escHtml(clipperShort)}</span>
+          ${isMyClip ? '<span style="font-size:0.65rem;color:var(--orange);font-weight:700;">(you)</span>' : ''}
           ${s.isWinner ? '<span class="sub-winner-badge">🏆 WINNER</span>' : ''}
+          <span class="sub-time">${timeAgo(s.timestamp || 0)}</span>
         </div>
+        <a href="${escHtml(s.clipLink)}" target="_blank" rel="noreferrer" class="sub-link" onclick="event.stopPropagation()">${escHtml(s.clipLink.replace('https://','').slice(0,55))}${s.clipLink.length>55?'…':''}</a>
       </div>
       ${isCommunityVote ? `<div class="sub-vote-box"><div class="sub-vote-num">${Number(s.voteCount)}</div><div class="sub-vote-label">votes</div></div>` : ''}
     </div>
+    <div class="sub-embed">${embedHTML}</div>
     <div class="sub-card-actions">
       ${isCommunityVote && isOpen && !deadlinePassed && !isStreamer ? `<button class="btn btn-ghost btn-sm sub-vote-btn" onclick="voteSubmission(${bountyId},${i})">👍 Vote for this clip</button>` : ''}
       ${isStreamer && Number(b.mode)===MODE_STREAMER_PICK && isOpen ? `
@@ -1178,12 +1300,14 @@ document.addEventListener('click', e => {
 const exposed = { connectWallet, disconnectWallet, showPage, switchTab, postBounty, submitClip, voteSubmission,
   confirmPickWinner, resolveCommunityVote, claimReward, cancelBounty, filterBounties, openBountyDetail,
   goBackFromBounty, setMobileActive, saveProfile, renderWinnerAmountInputs, autoDesc, setPbDuration,
-  fetchStreamerProfile, enrichBountyCard, loadProfileTab, linkBlazeToWallet, disconnectBlaze, updateBlazeUI };
+  fetchStreamerProfile, enrichBountyCard, loadProfileTab, linkBlazeToWallet, disconnectBlaze, updateBlazeUI,
+  loadPlatformStats, enrichSubmissionCard };
 Object.assign(window, exposed);
 
 document.addEventListener('DOMContentLoaded', () => {
   initSupabase();
   loadBounties();
+  loadPlatformStats();
   if (window.ethereum?.selectedAddress) connectWallet();
   handleBlazeCallback();
 
@@ -1665,8 +1789,11 @@ textarea { resize: vertical; min-height: 76px; }
             <button class="btn btn-ghost" onclick="showPage('docs')">📄 Docs</button>
           </div>
           <div class="hero-stats">
-            <div><div class="stat-num" id="stat-bounties">0</div><div class="stat-label">Open Bounties</div></div>
-            <div><div class="stat-num" id="blaze-balance">0</div><div class="stat-label">Your $BLAZE</div></div>
+            <div><div class="stat-num" id="stat-bounties">—</div><div class="stat-label">Open Bounties</div></div>
+            <div><div class="stat-num" id="stat-blaze-locked">—</div><div class="stat-label">$BLAZE in Escrow</div></div>
+            <div><div class="stat-num" id="stat-total-paid">—</div><div class="stat-label">$BLAZE Paid Out</div></div>
+            <div><div class="stat-num" id="stat-clippers">—</div><div class="stat-label">Clippers</div></div>
+            <div><div class="stat-num" id="blaze-balance">—</div><div class="stat-label">Your $BLAZE</div></div>
           </div>
         </div>
         <div style="flex-shrink:0;display:flex;align-items:center;justify-content:center;" class="hero-mascot-wrap">
@@ -2392,6 +2519,36 @@ textarea { resize: vertical; min-height: 76px; }
   .bd-reward-hero { padding:10px 12px;min-width:76px; }
   .bd-reward-num { font-size:1.3rem; }
 }
+
+/* ── SUBMISSION CARD UPGRADES ── */
+.sub-av {
+  width:36px;height:36px;border-radius:50%;
+  background:linear-gradient(135deg,var(--red),var(--orange));
+  display:flex;align-items:center;justify-content:center;
+  font-size:0.72rem;font-weight:800;color:#fff;
+  flex-shrink:0;overflow:hidden;
+}
+.sub-clipper-name { font-size:0.78rem;font-weight:700;color:var(--text); }
+.sub-time { font-size:0.65rem;color:var(--muted);margin-left:auto; }
+.sub-embed { margin:10px 0 4px; }
+.clip-embed-tweet {
+  min-height:120px;display:flex;align-items:center;justify-content:center;
+  background:rgba(255,255,255,0.02);border:1px solid var(--border);
+  border-radius:10px;padding:12px;
+}
+.clip-embed-fallback {
+  display:flex;align-items:center;gap:10px;
+  background:rgba(255,255,255,0.03);border:1px solid var(--border);
+  border-radius:8px;padding:12px 14px;
+}
+.clip-embed-link {
+  flex:1;font-family:var(--font-mono);font-size:0.75rem;
+  color:var(--orange);text-decoration:none;word-break:break-all;
+}
+.clip-embed-link:hover { text-decoration:underline; }
+
+/* ── HERO STATS EXTRAS ── */
+.hero-stats { flex-wrap:wrap; }
 </style>
 
 <!-- ==================== PAGE: DOCS ==================== -->
