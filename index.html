@@ -64,6 +64,8 @@ let escrow = null, escrowRead = null, blaze = null, blazeRead = null;
 let blazeDecimals = 18;
 let prevPage = 'home';
 let blazeProfile = null; // { username, displayName, avatarUrl, id } — set after OAuth
+let bountyMetaCache = {};  // bountyId -> row from bounty_meta table
+let pbXHandleCache = null; // the connected wallet's saved X handle, loaded for the Post Bounty form
 
 function initSupabase() {
   if (!db && window.supabase) db = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
@@ -552,6 +554,12 @@ async function enrichBountyCard(bountyId, wallet) {
       el.style.display = 'inline-flex';
     });
   }
+  // Populate the card banner with the streamer's Blaze profile picture
+  if (info.avatar) {
+    document.querySelectorAll(`#bc-banner-${bountyId}`).forEach(el => {
+      el.innerHTML = `<img src="${escHtml(info.avatar)}" class="bc-banner-img" onerror="this.parentElement.innerHTML='<div class=&quot;bc-banner-placeholder&quot;></div>'"/>${info.isLive ? '<span class="bc-banner-live">● LIVE</span>' : ''}`;
+    });
+  }
 }
 
 function statusBadge(status) {
@@ -638,6 +646,85 @@ function autoDesc(text) {
   if (el) { el.value = text; el.focus(); el.setSelectionRange(text.length, text.length); }
 }
 
+// ==================== POST BOUNTY EXTRAS (requirements toggle, X handle) ====================
+function setReqMode(mode, btn) {
+  document.querySelectorAll('.pb-req-toggle-btn').forEach(b => b.classList.remove('pb-req-toggle-active'));
+  btn.classList.add('pb-req-toggle-active');
+  document.getElementById('pb-req-freeform').style.display = mode === 'freeform' ? 'block' : 'none';
+  const listEl = document.getElementById('pb-req-list');
+  listEl.style.display = mode === 'list' ? 'block' : 'none';
+  listEl.dataset.mode = mode;
+  if (mode === 'list' && document.getElementById('pb-req-items').children.length === 0) addReqItem();
+}
+
+let reqItemCounter = 0;
+function addReqItem(value = '') {
+  const id = 'req-item-' + (reqItemCounter++);
+  const wrap = document.getElementById('pb-req-items');
+  const row = document.createElement('div');
+  row.className = 'pb-req-item';
+  row.id = id;
+  row.innerHTML = `<input type="text" class="pb-req-item-input" placeholder="e.g. Include the stream watermark" value="${escHtml(value)}"/><button type="button" class="pb-req-item-del" onclick="document.getElementById('${id}').remove()">✕</button>`;
+  wrap.appendChild(row);
+}
+
+function getReqMode() {
+  return document.getElementById('pb-req-list')?.dataset.mode === 'list' ? 'list' : 'freeform';
+}
+
+async function loadPbXHandle() {
+  const el = document.getElementById('pb-xhandle-display');
+  if (!el) return;
+  if (!userAddress) { el.innerHTML = '<span style="color:var(--muted);">Connect your wallet to load your X handle.</span>'; pbXHandleCache = null; return; }
+  try {
+    initSupabase();
+    const { data } = await db.from('profiles').select('x_handle').eq('wallet', userAddress.toLowerCase()).maybeSingle();
+    pbXHandleCache = data?.x_handle || null;
+    el.innerHTML = pbXHandleCache
+      ? `<span style="color:var(--orange);font-weight:700;">@${escHtml(pbXHandleCache)}</span> will be tagged automatically.`
+      : `<span style="color:var(--red);">No X handle set on your profile yet.</span>`;
+  } catch(e) {
+    pbXHandleCache = null;
+    el.innerHTML = '<span style="color:var(--muted);">Could not load your X handle.</span>';
+  }
+}
+
+// Saves the fields the on-chain contract has no room for (title, requirements,
+// schedule, winner count, X handle) into Supabase, keyed by the on-chain bounty id.
+async function saveBountyMeta(bountyId, meta) {
+  try {
+    initSupabase();
+    const row = {
+      bounty_id: bountyId,
+      streamer_wallet: userAddress.toLowerCase(),
+      stream_title: meta.streamTitle || null,
+      x_handle: meta.xHandle || null,
+      requirements_type: meta.reqType,
+      requirements_text: meta.reqType === 'freeform' ? (meta.reqText || null) : null,
+      requirements_list: meta.reqType === 'list' ? meta.reqList : [],
+      schedule_day: meta.scheduleDay || null,
+      schedule_time: meta.scheduleTime || null,
+      schedule_timezone: meta.scheduleTz || null,
+      num_winners: meta.numWinners || 1
+    };
+    const { error } = await db.from('bounty_meta').upsert(row, { onConflict: 'bounty_id' });
+    if (error) console.error('saveBountyMeta failed:', error);
+    else bountyMetaCache[bountyId] = row;
+  } catch(e) { console.error('saveBountyMeta failed:', e); }
+}
+
+async function loadBountyMeta(bountyId) {
+  if (bountyMetaCache[bountyId] !== undefined) return bountyMetaCache[bountyId];
+  try {
+    initSupabase();
+    const { data } = await db.from('bounty_meta').select('*').eq('bounty_id', bountyId).maybeSingle();
+    bountyMetaCache[bountyId] = data || null;
+    return bountyMetaCache[bountyId];
+  } catch(e) {
+    return null;
+  }
+}
+
 async function postBounty() {
   if (!userAddress) { toast('Connect wallet first', 'error'); return; }
   if (!escrow || !blaze) { toast('Wallet not ready — reconnect', 'error'); return; }
@@ -653,12 +740,20 @@ async function postBounty() {
   const mode        = parseInt(document.querySelector('input[name="pb-mode"]:checked')?.value ?? '0');
   const durationHrs = parseFloat(document.getElementById('pb-duration')?.value || '24');
 
+  // Off-chain metadata fields (saved to Supabase after the on-chain tx confirms)
+  const streamTitle  = document.getElementById('pb-stream-title')?.value.trim() || '';
+  const reqType      = getReqMode();
+  const reqText      = document.getElementById('pb-req-text')?.value.trim() || '';
+  const reqList      = [...document.querySelectorAll('.pb-req-item-input')].map(i => i.value.trim()).filter(Boolean);
+  const scheduleDay  = document.getElementById('pb-schedule-day')?.value || '';
+  const scheduleTime = document.getElementById('pb-schedule-time')?.value || '';
+  const scheduleTz   = document.getElementById('pb-schedule-tz')?.value.trim() || '';
+  const numWinners   = parseInt(document.getElementById('pb-num-winners')?.value || '1');
+
   if (!reward || reward <= 0)  { toast('Enter a valid $BLAZE reward', 'error'); return; }
   if (!description)             { toast('Description is required', 'error'); return; }
   if (durationHrs < 1)          { toast('Minimum 1 hour duration', 'error'); return; }
-  if (!reward || reward <= 0)  { toast('Enter a valid $BLAZE reward', 'error'); return; }
-  if (!description)             { toast('Description is required', 'error'); return; }
-  if (durationHrs < 1)          { toast('Minimum 1 hour duration', 'error'); return; }
+  if (numWinners < 1)           { toast('Number of winners must be at least 1', 'error'); return; }
 
   const rewardWei = ethers.parseUnits(reward.toString(), blazeDecimals || 18);
   const deadline  = Math.floor(Date.now()/1000) + Math.floor(durationHrs * 3600) + 60; // +60s buffer for block time
@@ -667,20 +762,16 @@ async function postBounty() {
   if (btn) btn.disabled = true;
 
   try {
-    // Check allowance and approve in parallel with UX update
+    // Check allowance and approve if needed
     setTxStatus('tx-post', '⏳ Checking $BLAZE allowance…', 'info');
     const allowance = await blaze.allowance(userAddress, ESCROW_ADDRESS);
 
-
     if (allowance < rewardWei) {
-      setTxStatus('tx-post', '📝 Step 1/2 — Approve $BLAZE (sign in wallet)…', 'info');
-      // Use exact amount instead of MaxUint256 so user sees the real number in their wallet
       setTxStatus('tx-post', '📝 Step 1/2 — Approve $BLAZE (sign in wallet)…', 'info');
       // Use exact amount instead of MaxUint256 so user sees the real number in their wallet
       const approveTx = await blaze.approve(ESCROW_ADDRESS, rewardWei);
       setTxStatus('tx-post', '⏳ Waiting for approval confirmation…', 'info');
       await approveTx.wait(1); // wait 1 block only — faster than default
-      setTxStatus('tx-post', '⏳ Waiting for approval confirmation…', 'info');
     }
 
     setTxStatus('tx-post', '📝 Step 2/2 — Posting bounty (sign in wallet)…', 'info');
@@ -689,26 +780,31 @@ async function postBounty() {
     setTxStatus('tx-post', '⏳ Confirming on-chain…', 'info');
     await tx.wait(1);
 
+    // The contract has no fields for title/requirements/schedule/winner-count/X handle,
+    // so save those to Supabase against the new bounty id once it's confirmed on-chain.
+    setTxStatus('tx-post', '💾 Saving bounty details…', 'info');
+    let newBountyId = null;
+    try {
+      const reader = escrowRead || new ethers.Contract(ESCROW_ADDRESS, ESCROW_ABI, new ethers.JsonRpcProvider(FUJI_RPC));
+      newBountyId = Number(await reader.bountyCount()) - 1; // sequential ids — this is the one we just created
+      await saveBountyMeta(newBountyId, {
+        streamTitle, xHandle: pbXHandleCache, reqType, reqText, reqList,
+        scheduleDay, scheduleTime, scheduleTz, numWinners
+      });
+    } catch(metaErr) { console.error('Could not save bounty metadata:', metaErr); }
+
     setTxStatus('tx-post', '✅ Bounty posted! Redirecting…', 'success');
     toast('🎉 Bounty live! Clippers can now submit.');
 
     // Reset form
-    ['pb-reward','pb-vod','pb-description'].forEach(id => {
+    ['pb-reward','pb-vod','pb-description','pb-stream-title','pb-req-text','pb-schedule-tz'].forEach(id => {
       const el = document.getElementById(id); if (el) el.value = '';
     });
     document.getElementById('pb-duration').value = '24';
-
-    setTxStatus('tx-post', '⏳ Confirming on-chain…', 'info');
-    await tx.wait(1);
-
-    setTxStatus('tx-post', '✅ Bounty posted! Redirecting…', 'success');
-    toast('🎉 Bounty live! Clippers can now submit.');
-
-    // Reset form
-    ['pb-reward','pb-vod','pb-description'].forEach(id => {
-      const el = document.getElementById(id); if (el) el.value = '';
-    });
-    document.getElementById('pb-duration').value = '24';
+    document.getElementById('pb-num-winners').value = '1';
+    document.getElementById('pb-schedule-day').value = '';
+    document.getElementById('pb-schedule-time').value = '';
+    document.getElementById('pb-req-items').innerHTML = '';
 
     loadBounties();
     setTimeout(() => showPage('bounties'), 1000);
@@ -731,9 +827,10 @@ async function openBountyDetail(bountyId) {
 
   try {
     const reader = escrowRead || new ethers.Contract(ESCROW_ADDRESS, ESCROW_ABI, new ethers.JsonRpcProvider(FUJI_RPC));
-    const [[raw, subs], claimRaw] = await Promise.all([
+    const [[raw, subs], claimRaw, meta] = await Promise.all([
       Promise.all([reader.getBounty(bountyId), reader.getSubmissions(bountyId)]),
-      userAddress ? reader.getClaimable(userAddress, bountyId).catch(()=>0n) : Promise.resolve(0n)
+      userAddress ? reader.getClaimable(userAddress, bountyId).catch(()=>0n) : Promise.resolve(0n),
+      loadBountyMeta(bountyId)
     ]);
 
     const b = { streamer:raw[0], reward:raw[1], deadline:raw[2], postedAt:raw[3], mode:raw[4], status:raw[5], vodId:raw[6], description:raw[7], submissionCount:raw[8], resolvedAt:raw[9] };
@@ -752,6 +849,15 @@ async function openBountyDetail(bountyId) {
 
     el.innerHTML = `
     <div class="bd-wrap">
+
+      <!-- BANNER (streamer's Blaze profile picture) -->
+      <div class="bd-banner" id="bd-banner-${bountyId}">
+        <div class="bd-banner-placeholder"></div>
+        <div class="bd-banner-overlay">
+          <div class="bd-banner-title">${meta?.stream_title ? escHtml(meta.stream_title) : 'Bounty #' + bountyId}</div>
+        </div>
+        <button class="bd-share-btn" onclick="shareBounty(${bountyId})" title="Copy shareable link">🔗 Share</button>
+      </div>
 
       <!-- HERO HEADER -->
       <div class="bd-hero">
@@ -790,6 +896,9 @@ async function openBountyDetail(bountyId) {
           <div class="bd-info-val">${postedDate}</div>
         </div>
       </div>
+
+      <!-- EXTRA DETAILS (title/requirements/schedule/winners/X handle from Supabase) -->
+      ${meta ? bountyMetaCardHTML(meta) : ''}
 
       <!-- STREAMER CARD (async enriched) -->
       <div class="bd-streamer-card" id="bd-streamer-${bountyId}">
@@ -856,14 +965,165 @@ async function openBountyDetail(bountyId) {
         </div>
       </div>` : ''}
 
+      <!-- COMMENTS -->
+      <div class="bd-section">
+        <div class="bd-section-title">💬 Comments</div>
+        <div class="bd-section-body">
+          <p style="font-size:0.76rem;color:var(--muted);margin-bottom:10px;">Streamer and clippers can talk through details here.</p>
+          <div id="bd-comments-list-${bountyId}"><p style="color:var(--muted);font-size:0.8rem;">Loading comments…</p></div>
+          ${userAddress ? `
+          <div class="bd-comment-form">
+            <textarea id="bd-comment-input-${bountyId}" rows="2" placeholder="Write a comment…"></textarea>
+            <button class="btn btn-primary btn-sm" onclick="postComment(${bountyId})">Post</button>
+          </div>` : `<p style="font-size:0.76rem;color:var(--muted);">Connect your wallet to comment.</p>`}
+        </div>
+      </div>
+
     </div>`;
 
-    // Async enrich streamer card
+    // Async enrich streamer card + banner
     enrichBountyDetailStreamer(bountyId, b.streamer, isStreamer);
+    loadComments(bountyId);
+    if (isStreamer) loadSubmissionFlags(bountyId);
 
   } catch(e) {
     el.innerHTML = `<div class="bd-error"><div style="font-size:1.5rem;margin-bottom:8px;">⚠️</div><div>${escHtml(friendlyError(e))}</div></div>`;
   }
+}
+
+// ==================== BOUNTY METADATA CARD ====================
+function bountyMetaCardHTML(meta) {
+  const hasReq = meta.requirements_type === 'list'
+    ? (meta.requirements_list && meta.requirements_list.length > 0)
+    : !!meta.requirements_text;
+  const hasSchedule = meta.schedule_day || meta.schedule_time;
+  if (!meta.x_handle && !hasReq && !hasSchedule && !meta.num_winners) return '';
+
+  return `
+  <div class="bd-meta-card">
+    ${meta.x_handle ? `<div class="bd-meta-row"><span class="bd-meta-label">𝕏 Tagging</span><a href="https://x.com/${escHtml(meta.x_handle)}" target="_blank" rel="noreferrer" class="bd-meta-val" style="color:var(--orange);">@${escHtml(meta.x_handle)}</a></div>` : ''}
+    ${meta.num_winners ? `<div class="bd-meta-row"><span class="bd-meta-label">🏆 Winners planned</span><span class="bd-meta-val">${Number(meta.num_winners)}</span></div>` : ''}
+    ${hasSchedule ? `<div class="bd-meta-row"><span class="bd-meta-label">📆 Stream Schedule</span><span class="bd-meta-val">${escHtml([meta.schedule_day, meta.schedule_time, meta.schedule_timezone].filter(Boolean).join(' · ')) || '—'}</span></div>` : ''}
+    ${hasReq ? `
+    <div class="bd-meta-req">
+      <div class="bd-meta-label" style="margin-bottom:6px;">📋 Special Requirements / Rules</div>
+      ${meta.requirements_type === 'list'
+        ? `<ul class="bd-req-ul">${(meta.requirements_list||[]).map(item => `<li>${escHtml(item)}</li>`).join('')}</ul>`
+        : `<p style="font-size:0.82rem;color:var(--text);white-space:pre-wrap;line-height:1.5;">${escHtml(meta.requirements_text)}</p>`}
+    </div>` : ''}
+  </div>`;
+}
+
+// ==================== SHARE ====================
+function shareBounty(bountyId) {
+  const url = `${window.location.origin}${window.location.pathname}?bounty=${bountyId}`;
+  if (navigator.share) {
+    navigator.share({ title: 'BlazeDAO Bounty', url }).catch(() => {});
+  } else if (navigator.clipboard) {
+    navigator.clipboard.writeText(url).then(() => toast('🔗 Link copied to clipboard')).catch(() => toast(url));
+  } else {
+    toast(url);
+  }
+}
+
+// Check the URL for ?bounty=ID on load and jump straight to that bounty
+function handleSharedBountyLink() {
+  const params = new URLSearchParams(window.location.search);
+  const id = params.get('bounty');
+  if (id !== null && /^\d+$/.test(id)) openBountyDetail(parseInt(id));
+}
+
+// ==================== COMMENTS ====================
+async function loadComments(bountyId) {
+  const el = document.getElementById(`bd-comments-list-${bountyId}`);
+  if (!el) return;
+  try {
+    initSupabase();
+    const { data, error } = await db.from('bounty_comments').select('*').eq('bounty_id', bountyId).order('created_at', { ascending: true });
+    if (error) throw error;
+    if (!data || data.length === 0) { el.innerHTML = '<p style="color:var(--muted);font-size:0.8rem;">No comments yet — start the conversation.</p>'; return; }
+    el.innerHTML = data.map(c => `
+      <div class="bd-comment">
+        <div class="bd-comment-head">
+          <span class="bd-comment-author">${escHtml(c.display_name || (c.wallet.slice(0,6)+'…'+c.wallet.slice(-4)))}</span>
+          <span class="bd-comment-time">${timeAgo(Math.floor(new Date(c.created_at).getTime()/1000))}</span>
+        </div>
+        <div class="bd-comment-body">${escHtml(c.message)}</div>
+      </div>`).join('');
+  } catch(e) {
+    el.innerHTML = '<p style="color:var(--muted);font-size:0.8rem;">Could not load comments.</p>';
+  }
+}
+
+async function postComment(bountyId) {
+  if (!userAddress) { toast('Connect wallet first', 'error'); return; }
+  const input = document.getElementById(`bd-comment-input-${bountyId}`);
+  const message = input?.value.trim();
+  if (!message) { toast('Write something first', 'error'); return; }
+  try {
+    initSupabase();
+    const { error } = await db.from('bounty_comments').insert({
+      bounty_id: bountyId,
+      wallet: userAddress.toLowerCase(),
+      display_name: blazeProfile?.username || null,
+      message
+    });
+    if (error) throw error;
+    input.value = '';
+    loadComments(bountyId);
+  } catch(e) {
+    toast('Could not post comment', 'error');
+  }
+}
+
+// ==================== FLAGS (streamer-only visibility) ====================
+function toggleFlagBox(cardId) {
+  const box = document.getElementById(`flag-box-${cardId}`);
+  if (box) box.style.display = box.style.display === 'none' ? 'block' : 'none';
+}
+
+async function submitFlag(bountyId, subIndex, cardId) {
+  if (!userAddress) { toast('Connect wallet first', 'error'); return; }
+  const input = document.getElementById(`flag-reason-${cardId}`);
+  const reason = input?.value.trim();
+  if (!reason || reason.length < 3) { toast('Add a short reason for the flag', 'error'); return; }
+  try {
+    initSupabase();
+    const { error } = await db.from('submission_flags').insert({
+      bounty_id: bountyId,
+      submission_index: subIndex,
+      flagged_by: userAddress.toLowerCase(),
+      reason
+    });
+    if (error) throw error;
+    toast('🚩 Flagged — only the streamer can see this');
+    if (input) input.value = '';
+    toggleFlagBox(cardId);
+  } catch(e) {
+    toast('Could not submit flag', 'error');
+  }
+}
+
+// Streamer-only: fetch flags for every submission in this bounty via the
+// server-side endpoint, which verifies the caller is really the streamer
+// before returning anything (see api/bounty-flags.js).
+async function loadSubmissionFlags(bountyId) {
+  if (!userAddress) return;
+  try {
+    const res = await fetch(`/api/bounty-flags?bountyId=${bountyId}&wallet=${userAddress.toLowerCase()}`);
+    if (!res.ok) return;
+    const { flags } = await res.json();
+    if (!flags || flags.length === 0) return;
+    const bySubmission = {};
+    flags.forEach(f => { (bySubmission[f.submission_index] ??= []).push(f); });
+    Object.entries(bySubmission).forEach(([idx, list]) => {
+      const el = document.getElementById(`flags-streamer-view-${bountyId}-${idx}`);
+      if (!el) return;
+      el.style.display = 'block';
+      el.innerHTML = `<div class="bd-flag-header">🚩 ${list.length} flag${list.length!==1?'s':''} (visible to you only)</div>` +
+        list.map(f => `<div class="bd-flag-item"><span class="bd-flag-from">${escHtml(f.flagged_by.slice(0,6)+'…'+f.flagged_by.slice(-4))}:</span> ${escHtml(f.reason)}</div>`).join('');
+    });
+  } catch(e) { /* silent — flags are a nice-to-have overlay */ }
 }
 
 async function enrichBountyDetailStreamer(bountyId, wallet, isStreamer) {
@@ -885,6 +1145,20 @@ async function enrichBountyDetailStreamer(bountyId, wallet, isStreamer) {
       </div>
       ${info.isLive ? `<span class="bd-live-badge">🔴 LIVE</span>` : ''}
     </div>`;
+
+  // Populate the banner behind the title with the streamer's Blaze profile picture
+  const bannerEl = document.getElementById(`bd-banner-${bountyId}`);
+  if (bannerEl && info.avatar) {
+    const placeholder = bannerEl.querySelector('.bd-banner-placeholder');
+    if (placeholder) {
+      const img = document.createElement('img');
+      img.src = info.avatar;
+      img.className = 'bd-banner-img';
+      img.onerror = () => { img.remove(); };
+      bannerEl.insertBefore(img, placeholder);
+      placeholder.remove();
+    }
+  }
 }
 
 // ==================== CLIP EMBED + EXTRACTOR (from moochrunner) ====================
@@ -988,7 +1262,14 @@ function submissionHTML(s, i, bountyId, b, isStreamer, isCommunityVote, isOpen, 
         <input type="checkbox" class="pw-checkbox" data-idx="${i}" onchange="renderWinnerAmountInputs(${bountyId})"/>
         <span>Select as winner</span>
       </label>` : ''}
+      ${!isMyClip && userAddress ? `<button class="btn btn-ghost btn-sm sub-flag-btn" onclick="toggleFlagBox('${cardId}')">🚩 Flag</button>` : ''}
     </div>
+    ${!isMyClip && userAddress ? `
+    <div id="flag-box-${cardId}" class="sub-flag-box" style="display:none;">
+      <textarea id="flag-reason-${cardId}" rows="2" placeholder="Why are you flagging this submission? Only the streamer will see this."></textarea>
+      <button class="btn btn-primary btn-sm" onclick="submitFlag(${bountyId},${i},'${cardId}')">Submit Flag</button>
+    </div>` : ''}
+    ${isStreamer ? `<div id="flags-streamer-view-${bountyId}-${i}" class="sub-flags-streamer-view" style="display:none;"></div>` : ''}
   </div>`;
 }
 
@@ -1286,6 +1567,7 @@ function switchTab(tabId, clickedEl) {
   if (tabId === 'tab-bounties-dash') loadBounties();
   if (tabId === 'tab-submissions') loadMySubmissions();
   if (tabId === 'tab-profile') loadProfileTab();
+  if (tabId === 'tab-post') loadPbXHandle();
 }
 
 function setMobileActive(btnId) {
@@ -1301,7 +1583,8 @@ const exposed = { connectWallet, disconnectWallet, showPage, switchTab, postBoun
   confirmPickWinner, resolveCommunityVote, claimReward, cancelBounty, filterBounties, openBountyDetail,
   goBackFromBounty, setMobileActive, saveProfile, renderWinnerAmountInputs, autoDesc, setPbDuration,
   fetchStreamerProfile, enrichBountyCard, loadProfileTab, linkBlazeToWallet, disconnectBlaze, updateBlazeUI,
-  loadPlatformStats, enrichSubmissionCard };
+  loadPlatformStats, enrichSubmissionCard, setReqMode, addReqItem, loadPbXHandle, shareBounty, postComment,
+  toggleFlagBox, submitFlag };
 Object.assign(window, exposed);
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -1310,6 +1593,7 @@ document.addEventListener('DOMContentLoaded', () => {
   loadPlatformStats();
   if (window.ethereum?.selectedAddress) connectWallet();
   handleBlazeCallback();
+  handleSharedBountyLink();
 
   // Mode card radio toggle — highlight selected card
   document.addEventListener('change', e => {
@@ -1816,9 +2100,14 @@ textarea { resize: vertical; min-height: 76px; }
 <!-- ==================== PAGE: BOUNTIES ==================== -->
 <div id="page-bounties" class="page">
   <div class="container">
-    <div class="page-header" style="margin-bottom:20px;">
-      <h2>Bounty Board</h2>
-      <p>$BLAZE bounties from streamers, open to all clippers.</p>
+    <div class="pg-banner">
+      <div class="pg-banner-row">
+        <div>
+          <div class="pg-banner-title">Bounty Board</div>
+          <div class="pg-banner-sub">$BLAZE bounties from streamers, open to all clippers.</div>
+        </div>
+        <img src="https://raw.githubusercontent.com/precidoboss/my-game-sprites/main/24333f4f-66da-4d04-a37e-e03d4c992228-removebg-preview.png" class="pg-banner-mascot" onerror="this.style.display='none'" alt=""/>
+      </div>
     </div>
     <div style="display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap;">
       <button class="btn btn-ghost btn-sm bounty-filter-btn active" onclick="filterBounties('all', this)">All</button>
@@ -1853,6 +2142,15 @@ textarea { resize: vertical; min-height: 76px; }
 
     <!-- OVERVIEW -->
     <div id="tab-overview" class="tab-content" style="display:block;">
+      <div class="pg-banner">
+        <div class="pg-banner-row">
+          <div>
+            <div class="pg-banner-title">Overview</div>
+            <div class="pg-banner-sub" id="dash-welcome">Welcome back</div>
+          </div>
+          <img src="https://raw.githubusercontent.com/precidoboss/my-game-sprites/main/24333f4f-66da-4d04-a37e-e03d4c992228-removebg-preview.png" class="pg-banner-mascot" onerror="this.style.display='none'" alt=""/>
+        </div>
+      </div>
       <div id="dash-profile-summary" class="dash-profile-card">
         <p style="color:var(--muted);">Loading…</p>
       </div>
@@ -1942,7 +2240,15 @@ textarea { resize: vertical; min-height: 76px; }
 
     <!-- POST BOUNTY -->
     <div id="tab-post" class="tab-content" style="display:none;">
-      <div class="page-header"><h2>Post a Bounty</h2><p>Lock $BLAZE in escrow — clippers compete, you pick the winner.</p></div>
+      <div class="pg-banner">
+        <div class="pg-banner-row">
+          <div>
+            <div class="pg-banner-title">Post a Bounty</div>
+            <div class="pg-banner-sub">Lock $BLAZE in escrow — clippers compete, you pick the winner.</div>
+          </div>
+          <img src="https://raw.githubusercontent.com/precidoboss/my-game-sprites/main/24333f4f-66da-4d04-a37e-e03d4c992228-removebg-preview.png" class="pg-banner-mascot" onerror="this.style.display='none'" alt=""/>
+        </div>
+      </div>
 
       <div class="pb-section">
         <div class="pb-section-label"><span class="pb-step">1</span> Reward Amount</div>
@@ -2016,6 +2322,69 @@ textarea { resize: vertical; min-height: 76px; }
             <div class="pb-mode-title">Community Vote</div>
             <div class="pb-mode-desc">Viewers vote — highest voted clip wins when deadline passes</div>
           </label>
+        </div>
+      </div>
+
+      <div class="pb-section">
+        <div class="pb-section-label"><span class="pb-step">6</span> Stream Title</div>
+        <div class="pb-section-body">
+          <input type="text" id="pb-stream-title" placeholder="e.g. Ranked grind to Diamond"/>
+          <p class="pb-hint">Shown on the bounty card and detail page.</p>
+        </div>
+      </div>
+
+      <div class="pb-section">
+        <div class="pb-section-label"><span class="pb-step">7</span> X Account to Tag</div>
+        <div class="pb-section-body">
+          <div id="pb-xhandle-display" style="font-size:0.85rem;">Loading your X handle…</div>
+          <p class="pb-hint">Pulled from your profile automatically. <a href="#" onclick="showPage('dashboard');switchTab('tab-profile',document.getElementById('nav-profile'));return false;" style="color:var(--orange);">Update it in your profile</a> if it's missing.</p>
+        </div>
+      </div>
+
+      <div class="pb-section">
+        <div class="pb-section-label"><span class="pb-step">8</span> Special Requirements / Rules <span class="pb-optional">optional</span></div>
+        <div class="pb-section-body">
+          <div class="pb-req-toggle">
+            <button type="button" class="pb-req-toggle-btn pb-req-toggle-active" data-mode="freeform" onclick="setReqMode('freeform', this)">📝 Write a note</button>
+            <button type="button" class="pb-req-toggle-btn" data-mode="list" onclick="setReqMode('list', this)">☑️ Checklist</button>
+          </div>
+          <div id="pb-req-freeform">
+            <textarea id="pb-req-text" rows="3" placeholder="e.g. Must include the stream watermark, keep clips under 60s, no reposts from other bounties…"></textarea>
+          </div>
+          <div id="pb-req-list" style="display:none;" data-mode="list">
+            <div id="pb-req-items"></div>
+            <button type="button" class="btn btn-ghost btn-sm" style="margin-top:6px;" onclick="addReqItem()">+ Add requirement</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="pb-section">
+        <div class="pb-section-label"><span class="pb-step">9</span> Stream Schedule <span class="pb-optional">optional</span></div>
+        <div class="pb-section-body" style="display:flex;gap:10px;flex-wrap:wrap;">
+          <div class="form-group" style="flex:1;min-width:130px;margin-bottom:0;">
+            <label>Day</label>
+            <select id="pb-schedule-day">
+              <option value="">— No fixed day —</option>
+              <option>Monday</option><option>Tuesday</option><option>Wednesday</option>
+              <option>Thursday</option><option>Friday</option><option>Saturday</option><option>Sunday</option>
+            </select>
+          </div>
+          <div class="form-group" style="flex:1;min-width:110px;margin-bottom:0;">
+            <label>Time</label>
+            <input type="time" id="pb-schedule-time"/>
+          </div>
+          <div class="form-group" style="flex:1;min-width:110px;margin-bottom:0;">
+            <label>Timezone</label>
+            <input type="text" id="pb-schedule-tz" placeholder="e.g. WAT, UTC, EST"/>
+          </div>
+        </div>
+      </div>
+
+      <div class="pb-section">
+        <div class="pb-section-label"><span class="pb-step">10</span> Number of Winners</div>
+        <div class="pb-section-body">
+          <input type="number" id="pb-num-winners" min="1" step="1" value="1" style="width:100px;"/>
+          <p class="pb-hint">How many clippers you plan to reward. You'll still set exact $BLAZE splits when picking winners.</p>
         </div>
       </div>
 
@@ -2123,6 +2492,14 @@ textarea { resize: vertical; min-height: 76px; }
 .pb-quick-btn:hover { border-color:var(--orange);color:var(--orange);background:rgba(255,107,26,0.08); }
 
 .pb-hint { font-size:0.7rem;color:var(--muted);margin:6px 0 0;line-height:1.4; }
+
+.pb-req-toggle { display:flex;gap:8px;margin-bottom:10px; }
+.pb-req-toggle-btn { flex:1;padding:8px 10px;border-radius:8px;border:1px solid var(--border);background:transparent;color:var(--muted);font-size:0.78rem;font-weight:700;cursor:pointer;transition:all 0.15s; }
+.pb-req-toggle-btn.pb-req-toggle-active { border-color:var(--orange);color:var(--orange);background:rgba(255,107,26,0.08); }
+.pb-req-item { display:flex;gap:6px;align-items:center;margin-bottom:6px; }
+.pb-req-item-input { flex:1; }
+.pb-req-item-del { flex-shrink:0;width:28px;height:28px;border-radius:6px;border:1px solid var(--border);background:transparent;color:var(--red);cursor:pointer;font-size:0.8rem; }
+.pb-req-item-del:hover { background:rgba(232,53,10,0.1); }
 
 .pb-template-row {
   display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px;
@@ -2441,7 +2818,57 @@ textarea { resize: vertical; min-height: 76px; }
 }
 
 /* ── BOUNTY DETAIL ── */
+/* ── Reusable page banner (mascot + gradient), responsive for mobile/desktop ── */
+.pg-banner { position:relative;border-radius:14px;overflow:hidden;padding:clamp(18px,4vw,28px) clamp(16px,4vw,26px);margin-bottom:20px;
+  background:linear-gradient(135deg,#1a0a00 0%,#140a00 45%,#0a0d00 100%);border:1px solid var(--border); }
+.pg-banner::before { content:'';position:absolute;inset:0;pointer-events:none;
+  background:radial-gradient(ellipse at 15% 30%,rgba(232,53,10,0.16) 0%,transparent 55%),radial-gradient(ellipse at 85% 70%,rgba(255,149,0,0.10) 0%,transparent 50%); }
+.pg-banner-row { position:relative;z-index:1;display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap; }
+.pg-banner-title { font-family:var(--font-display);font-size:clamp(1.7rem,5vw,2.6rem);line-height:1;color:#fff;letter-spacing:0.5px; }
+.pg-banner-sub { font-size:clamp(0.75rem,1.6vw,0.86rem);color:var(--muted);margin-top:6px;max-width:480px; }
+.pg-banner-mascot { width:clamp(56px,10vw,96px);height:auto;object-fit:contain;flex-shrink:0;filter:drop-shadow(0 0 18px rgba(232,53,10,0.35)); }
+@media (max-width:520px) { .pg-banner-mascot { display:none; } }
+
 .bd-wrap { display:flex;flex-direction:column;gap:14px;padding-bottom:60px; }
+
+/* Bounty detail banner (streamer avatar) */
+.bd-banner { position:relative;width:100%;height:clamp(110px,22vw,180px);border-radius:14px;overflow:hidden;background:linear-gradient(135deg,rgba(232,53,10,0.12),rgba(255,149,0,0.06)); }
+.bd-banner-placeholder { width:100%;height:100%;background:linear-gradient(135deg,rgba(232,53,10,0.12),rgba(255,149,0,0.06)); }
+.bd-banner-img { position:absolute;inset:0;width:100%;height:100%;object-fit:cover;object-position:center;filter:blur(2px) saturate(1.3) brightness(0.75); }
+.bd-banner-overlay { position:absolute;inset:0;background:linear-gradient(to top,rgba(0,0,0,0.75) 0%,rgba(0,0,0,0.2) 55%,transparent 100%);display:flex;align-items:flex-end;padding:14px 16px; }
+.bd-banner-title { font-family:var(--font-display);font-size:clamp(1.3rem,4vw,2rem);color:#fff;line-height:1.1;letter-spacing:0.5px; }
+.bd-share-btn { position:absolute;top:10px;right:10px;background:rgba(0,0,0,0.55);backdrop-filter:blur(4px);border:1px solid rgba(255,255,255,0.25);color:#fff;font-size:0.72rem;font-weight:700;padding:6px 10px;border-radius:8px;cursor:pointer; }
+.bd-share-btn:hover { background:rgba(255,107,26,0.35);border-color:var(--orange); }
+
+/* Extra metadata card */
+.bd-meta-card { background:var(--card);border:1px solid var(--border);border-radius:12px;padding:14px 16px;display:flex;flex-direction:column;gap:8px; }
+.bd-meta-row { display:flex;justify-content:space-between;align-items:center;gap:10px;font-size:0.8rem; }
+.bd-meta-label { color:var(--muted);font-size:0.72rem;text-transform:uppercase;letter-spacing:0.04em;flex-shrink:0; }
+.bd-meta-val { font-weight:700;text-align:right; }
+.bd-meta-req { border-top:1px solid var(--border);padding-top:10px;margin-top:2px; }
+.bd-req-ul { margin:0;padding-left:18px;font-size:0.82rem;color:var(--text);line-height:1.7; }
+
+/* Comments */
+.bd-comment { padding:10px 0;border-bottom:1px solid var(--border); }
+.bd-comment:last-child { border-bottom:none; }
+.bd-comment-head { display:flex;justify-content:space-between;align-items:baseline;gap:8px;margin-bottom:3px; }
+.bd-comment-author { font-size:0.78rem;font-weight:700;color:var(--orange); }
+.bd-comment-time { font-size:0.65rem;color:var(--muted);flex-shrink:0; }
+.bd-comment-body { font-size:0.84rem;color:var(--text);line-height:1.5;white-space:pre-wrap;word-break:break-word; }
+.bd-comment-form { display:flex;gap:8px;margin-top:12px;align-items:flex-end;flex-wrap:wrap; }
+.bd-comment-form textarea { flex:1;min-width:160px;resize:vertical; }
+
+/* Flags */
+.sub-flag-btn { color:var(--red);border-color:rgba(232,53,10,0.3); }
+.sub-flag-btn:hover { background:rgba(232,53,10,0.08); }
+.sub-flag-box { margin-top:10px;padding:10px;border:1px dashed rgba(232,53,10,0.35);border-radius:8px;background:rgba(232,53,10,0.04);display:flex;gap:8px;flex-wrap:wrap; }
+.sub-flag-box textarea { flex:1;min-width:150px;resize:vertical; }
+.sub-flags-streamer-view { margin-top:10px;padding:10px;border:1px solid rgba(232,53,10,0.35);border-radius:8px;background:rgba(232,53,10,0.06); }
+.bd-flag-header { font-size:0.7rem;font-weight:800;color:var(--red);text-transform:uppercase;letter-spacing:0.04em;margin-bottom:6px; }
+.bd-flag-item { font-size:0.78rem;color:var(--text);margin-bottom:4px;line-height:1.4; }
+.bd-flag-from { color:var(--muted);font-weight:700; }
+
+
 .bd-hero { display:flex;gap:16px;align-items:flex-start;background:var(--card);border:1px solid var(--border);border-radius:14px;padding:18px;position:relative;overflow:hidden; }
 .bd-hero::before { content:'';position:absolute;top:0;left:0;right:0;height:3px;background:linear-gradient(90deg,var(--red),var(--orange),var(--amber)); }
 .bd-hero-left { flex:1;min-width:0; }
@@ -2554,7 +2981,8 @@ textarea { resize: vertical; min-height: 76px; }
 <!-- ==================== PAGE: DOCS ==================== -->
 <div id="page-docs" class="page">
   <div class="container docs-wrap">
-    <div class="docs-hero">
+    <div class="docs-hero" style="position:relative;">
+      <img src="https://raw.githubusercontent.com/precidoboss/my-game-sprites/main/24333f4f-66da-4d04-a37e-e03d4c992228-removebg-preview.png" onerror="this.style.display='none'" alt="" style="position:absolute;top:6px;right:clamp(4px,3vw,24px);width:clamp(44px,9vw,78px);height:auto;object-fit:contain;filter:drop-shadow(0 0 14px rgba(232,53,10,0.3));"/>
       <div style="font-size:0.75rem;color:var(--orange);font-weight:700;text-transform:uppercase;letter-spacing:0.1em;margin-bottom:8px;">Built for Blaze Builder Challenge</div>
       <h1>BlazeDAO Docs</h1>
       <p style="color:var(--muted);max-width:520px;margin:0 auto;font-size:0.9rem;line-height:1.6;">The first Blaze-native clipping economy — connecting streamers and clippers through trustless smart contract escrow powered by $BLAZE.</p>
