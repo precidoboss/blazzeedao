@@ -582,6 +582,17 @@ function autoDesc(text) {
   const el = document.getElementById('pb-description');
   if (el) { el.value = text; el.focus(); el.setSelectionRange(text.length, text.length); }
 }
+function setPbDuration(hrs, btn) {
+  const el = document.getElementById('pb-duration');
+  if (el) el.value = hrs;
+  document.querySelectorAll('.pb-dur-btn').forEach(b => b.classList.remove('pb-dur-active'));
+  if (btn) btn.classList.add('pb-dur-active');
+}
+
+function autoDesc(text) {
+  const el = document.getElementById('pb-description');
+  if (el) { el.value = text; el.focus(); el.setSelectionRange(text.length, text.length); }
+}
 
 async function postBounty() {
   if (!userAddress) { toast('Connect wallet first', 'error'); return; }
@@ -620,14 +631,29 @@ async function postBounty() {
     if (allowance < rewardWei) {
       setTxStatus('tx-post', '📝 Step 1/2 — Approve $BLAZE (sign in wallet)…', 'info');
       // Use exact amount instead of MaxUint256 so user sees the real number in their wallet
+      setTxStatus('tx-post', '📝 Step 1/2 — Approve $BLAZE (sign in wallet)…', 'info');
+      // Use exact amount instead of MaxUint256 so user sees the real number in their wallet
       const approveTx = await blaze.approve(ESCROW_ADDRESS, rewardWei);
       setTxStatus('tx-post', '⏳ Waiting for approval confirmation…', 'info');
       await approveTx.wait(1); // wait 1 block only — faster than default
+      setTxStatus('tx-post', '⏳ Waiting for approval confirmation…', 'info');
     }
 
     setTxStatus('tx-post', '📝 Step 2/2 — Posting bounty (sign in wallet)…', 'info');
 
     const tx = await escrow.postBounty(rewardWei, vodId, description, mode, deadline);
+    setTxStatus('tx-post', '⏳ Confirming on-chain…', 'info');
+    await tx.wait(1);
+
+    setTxStatus('tx-post', '✅ Bounty posted! Redirecting…', 'success');
+    toast('🎉 Bounty live! Clippers can now submit.');
+
+    // Reset form
+    ['pb-reward','pb-vod','pb-description'].forEach(id => {
+      const el = document.getElementById(id); if (el) el.value = '';
+    });
+    document.getElementById('pb-duration').value = '24';
+
     setTxStatus('tx-post', '⏳ Confirming on-chain…', 'info');
     await tx.wait(1);
 
