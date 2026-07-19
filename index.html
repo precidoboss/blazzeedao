@@ -985,7 +985,7 @@ function submissionHTML(s, i, bountyId, b, isStreamer, isCommunityVote, isOpen, 
       ${isCommunityVote && isOpen && !deadlinePassed && !isStreamer ? `<button class="btn btn-ghost btn-sm sub-vote-btn" onclick="voteSubmission(${bountyId},${i})">👍 Vote for this clip</button>` : ''}
       ${isStreamer && Number(b.mode)===MODE_STREAMER_PICK && isOpen ? `
       <label class="sub-select-label">
-        <input type="checkbox" class="pw-checkbox" data-idx="${i}"/>
+        <input type="checkbox" class="pw-checkbox" data-idx="${i}" onchange="renderWinnerAmountInputs(${bountyId})"/>
         <span>Select as winner</span>
       </label>` : ''}
     </div>
@@ -2556,11 +2556,11 @@ textarea { resize: vertical; min-height: 76px; }
   <div class="container docs-wrap">
     <div class="docs-hero">
       <div style="font-size:0.75rem;color:var(--orange);font-weight:700;text-transform:uppercase;letter-spacing:0.1em;margin-bottom:8px;">Built for Blaze Builder Challenge</div>
-      <h1>BlazDAO Docs</h1>
+      <h1>BlazeDAO Docs</h1>
       <p style="color:var(--muted);max-width:520px;margin:0 auto;font-size:0.9rem;line-height:1.6;">The first Blaze-native clipping economy — connecting streamers and clippers through trustless smart contract escrow powered by $BLAZE.</p>
     </div>
     <div class="docs-nav">
-      <a href="#" onclick="event.preventDefault();document.getElementById('doc-what').scrollIntoView({behavior:'smooth'})">What is BlazDAO</a>
+      <a href="#" onclick="event.preventDefault();document.getElementById('doc-what').scrollIntoView({behavior:'smooth'})">What is BlazeDAO</a>
       <a href="#" onclick="event.preventDefault();document.getElementById('doc-how').scrollIntoView({behavior:'smooth'})">How It Works</a>
       <a href="#" onclick="event.preventDefault();document.getElementById('doc-api').scrollIntoView({behavior:'smooth'})">Blaze API Usage</a>
       <a href="#" onclick="event.preventDefault();document.getElementById('doc-contracts').scrollIntoView({behavior:'smooth'})">Smart Contracts</a>
@@ -2571,14 +2571,14 @@ textarea { resize: vertical; min-height: 76px; }
       <div style="font-size:1.2rem;flex-shrink:0;">&#x26A0;&#xFE0F;</div>
       <div>
         <div style="font-weight:800;margin-bottom:3px;">Currently on Avalanche Fuji Testnet</div>
-        <div style="font-size:0.8rem;color:var(--muted);line-height:1.5;">BlazDAO is live on Fuji testnet with a mock $BLAZE token for testing. We plan to use Blaze Hackathon funding to move to Avalanche C-Chain mainnet with real $BLAZE — covering marketing, server infrastructure, storage, and community growth.</div>
+        <div style="font-size:0.8rem;color:var(--muted);line-height:1.5;">BlazeDAO is live on Fuji testnet with a mock $BLAZE token for testing. We plan to use Blaze Hackathon funding to move to Avalanche C-Chain mainnet with real $BLAZE — covering marketing, server infrastructure, storage, and community growth.</div>
       </div>
     </div>
     <div class="docs-section" id="doc-what">
-      <div class="docs-section-title">What is BlazDAO?</div>
-      <div class="docs-card"><p>BlazDAO is a decentralised clipping economy built natively on top of Blaze.stream. Streamers post $BLAZE-denominated bounties tied to their real Blaze VODs and streams. Clippers watch the stream, capture the best moment, post the clip to X, and submit the link on-chain. The escrowed $BLAZE pays out automatically via smart contract — no middlemen, no manual payments, no trust required.</p></div>
-      <div class="docs-card"><h4>&#x1F3AF; Problem it solves</h4><p>Streamers want their streams clipped and shared to grow their audience. Clippers want to be compensated for quality content creation. Today both sides operate informally with no guarantee of payment. BlazDAO puts bounties on-chain and pays clippers in $BLAZE the moment a winner is chosen.</p></div>
-      <div class="docs-card"><h4>&#x1F525; Why Blaze?</h4><p>Blaze is the only web3-native streaming platform where creators earn on-chain and the audience is already crypto-native. $BLAZE as a reward currency is natural. We use Blaze OAuth for identity, Blaze channel APIs for live status and VOD data, and Blaze clips API for verification. BlazDAO is Blaze-first, not a Twitch clone bolted onto crypto.</p></div>
+      <div class="docs-section-title">What is BlazeDAO?</div>
+      <div class="docs-card"><p>BlazeDAO is a decentralised clipping economy built natively on top of Blaze.stream. Streamers post $BLAZE-denominated bounties tied to their real Blaze VODs and streams. Clippers watch the stream, capture the best moment, post the clip to X, and submit the link on-chain. The escrowed $BLAZE pays out automatically via smart contract — no middlemen, no manual payments, no trust required.</p></div>
+      <div class="docs-card"><h4>&#x1F3AF; Problem it solves</h4><p>Streamers want their streams clipped and shared to grow their audience. Clippers want to be compensated for quality content creation. Today both sides operate informally with no guarantee of payment. BlazeDAO puts bounties on-chain and pays clippers in $BLAZE the moment a winner is chosen.</p></div>
+      <div class="docs-card"><h4>&#x1F525; Why Blaze?</h4><p>Blaze is the only web3-native streaming platform where creators earn on-chain and the audience is already crypto-native. $BLAZE as a reward currency is natural. We use Blaze OAuth for identity, Blaze channel APIs for live status and VOD data, and Blaze clips API for verification. BlazeDAO is Blaze-first, not a Twitch clone bolted onto crypto.</p></div>
     </div>
     <div class="docs-section" id="doc-how">
       <div class="docs-section-title">How It Works</div>
@@ -2590,7 +2590,7 @@ textarea { resize: vertical; min-height: 76px; }
     </div>
     <div class="docs-section" id="doc-api">
       <div class="docs-section-title">Blaze API Usage</div>
-      <div class="docs-card" style="margin-bottom:14px;"><p>BlazDAO integrates Blaze's developer API throughout the entire user journey — identity verification, live stream data, VOD history, clips, and channel stats. This is the core of our Blaze Builder Challenge entry.</p></div>
+      <div class="docs-card" style="margin-bottom:14px;"><p>BlazeDAO integrates Blaze's developer API throughout the entire user journey — identity verification, live stream data, VOD history, clips, and channel stats. This is the core of our Blaze Builder Challenge entry.</p></div>
       <div class="docs-card">
         <h4 style="margin-bottom:12px;">Authentication &amp; Identity</h4>
         <div class="docs-api-row"><span class="docs-method docs-method-post">POST</span><div><div class="docs-api-path">blaze.stream/bapi/oauth2/generate-auth-url</div><div class="docs-api-desc">Generates a PKCE auth URL for user login — the primary identity mechanism replacing wallet-only sign-up.</div></div></div>
@@ -2625,7 +2625,7 @@ textarea { resize: vertical; min-height: 76px; }
     </div>
     <div class="docs-section">
       <div class="docs-section-title">Testnet to Mainnet Plan</div>
-      <div class="docs-card"><h4>Current state</h4><p>BlazDAO is fully functional on Avalanche Fuji testnet. Real user flows work end-to-end: Blaze OAuth login, bounty creation, clip submission, winner selection, and $BLAZE payout — all on testnet with mock tokens. The Blaze API integration is production-ready.</p></div>
+      <div class="docs-card"><h4>Current state</h4><p>BlazeDAO is fully functional on Avalanche Fuji testnet. Real user flows work end-to-end: Blaze OAuth login, bounty creation, clip submission, winner selection, and $BLAZE payout — all on testnet with mock tokens. The Blaze API integration is production-ready.</p></div>
       <div class="docs-card" style="margin-top:10px;"><h4>How Hackathon Funding Gets Us to Mainnet</h4><p>Marketing to bring streamers and clippers onto the platform, server infrastructure and storage costs (Vercel, Supabase, Render), tools and resources for scaling the backend, initial $BLAZE liquidity for the escrow contract, and community growth budget. We are applying to the Blaze Builder Challenge specifically because the prize provides exactly the bridge needed to move from a working testnet product to a live mainnet platform with real $BLAZE rewards for real clippers.</p></div>
     </div>
     <div class="docs-section" id="doc-roadmap">
