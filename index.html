@@ -791,6 +791,7 @@ async function postBounty() {
         streamTitle, xHandle: pbXHandleCache, reqType, reqText, reqList,
         scheduleDay, scheduleTime, scheduleTz, numWinners
       });
+      logActivity('bounty_posted', newBountyId, { reward, description, streamTitle });
     } catch(metaErr) { console.error('Could not save bounty metadata:', metaErr); }
 
     setTxStatus('tx-post', '✅ Bounty posted! Redirecting…', 'success');
@@ -1070,6 +1071,7 @@ async function postComment(bountyId) {
     });
     if (error) throw error;
     input.value = '';
+    logActivity('comment_posted', bountyId, { message: message.slice(0, 120) });
     loadComments(bountyId);
   } catch(e) {
     toast('Could not post comment', 'error');
@@ -1300,6 +1302,23 @@ function renderWinnerAmountInputs(bountyId) {
     </div>`).join('');
 }
 
+// ==================== ACTIVITY LOG (global platform feed) ====================
+// Fire-and-forget: records an action to the activity_log table so it shows up
+// in the platform-wide Activity feed. Never blocks or fails the actual on-chain
+// action if this write fails.
+async function logActivity(actionType, bountyId, detail = {}) {
+  if (!userAddress) return;
+  try {
+    initSupabase();
+    await db.from('activity_log').insert({
+      action_type: actionType,
+      actor_wallet: userAddress.toLowerCase(),
+      bounty_id: bountyId ?? null,
+      detail
+    });
+  } catch(e) { console.error('logActivity failed:', e); }
+}
+
 async function confirmPickWinner(bountyId) {
   const inputs = [...document.querySelectorAll('.pw-amount-input')];
   if (inputs.length === 0) { toast('Select submission(s) and click Refresh selected first', 'error'); return; }
@@ -1313,6 +1332,7 @@ async function confirmPickWinner(bountyId) {
     await tx.wait();
     setTxStatus('tx-pick', '✅ Winners paid!', 'success');
     toast('Winners confirmed and paid');
+    logActivity('winner_picked', bountyId, { winners: indexes.length, totalAmount: amounts.reduce((a,b)=>a+b,0) });
     openBountyDetail(bountyId);
   } catch(e) {
     setTxStatus('tx-pick', friendlyError(e), 'error');
@@ -1334,6 +1354,7 @@ async function resolveCommunityVote(bountyId) {
     const tx = await escrow.pickWinner(bountyId, winners, amounts);
     await tx.wait();
     toast('Vote resolved, winner(s) paid');
+    logActivity('vote_resolved', bountyId, { winners: winners.length });
     openBountyDetail(bountyId);
   } catch(e) { toast(friendlyError(e), 'error'); }
 }
@@ -1349,6 +1370,7 @@ async function submitClip(bountyId) {
     await tx.wait();
     setTxStatus('tx-submit', '✅ Clip submitted!', 'success');
     toast('Clip submitted');
+    logActivity('clip_submitted', bountyId, { clipLink: link });
     openBountyDetail(bountyId);
   } catch(e) {
     setTxStatus('tx-submit', friendlyError(e), 'error');
@@ -1360,15 +1382,18 @@ async function voteSubmission(bountyId, idx) {
     const tx = await escrow.voteSubmission(bountyId, idx);
     await tx.wait();
     toast('Vote cast');
+    logActivity('vote_cast', bountyId, {});
     openBountyDetail(bountyId);
   } catch(e) { toast(friendlyError(e), 'error'); }
 }
 
 async function claimReward(bountyId) {
   try {
+    const claimableWei = await escrowRead.getClaimable(userAddress, bountyId).catch(()=>0n);
     const tx = await escrow.claim(bountyId);
     await tx.wait();
     toast('🎉 $BLAZE claimed to your wallet');
+    logActivity('reward_claimed', bountyId, { amount: ethers.formatUnits(claimableWei, blazeDecimals || 18) });
     refreshBlazeBalance();
     openBountyDetail(bountyId);
   } catch(e) { toast(friendlyError(e), 'error'); }
@@ -1380,6 +1405,7 @@ async function cancelBounty(bountyId) {
     const tx = await escrow.cancelBounty(bountyId);
     await tx.wait();
     toast('Bounty cancelled, $BLAZE refunded');
+    logActivity('bounty_cancelled', bountyId, {});
     showPage('bounties');
     loadBounties();
   } catch(e) { toast(friendlyError(e), 'error'); }
@@ -1507,7 +1533,7 @@ async function loadDashboard() {
     document.getElementById('pf-username').value    = name !== 'Anonymous' ? name : '';
   }
 
-  loadMySubmissions();
+  loadMyStats();
 }
 
 function loadProfileTab() {
@@ -1516,6 +1542,109 @@ function loadProfileTab() {
   if (pfCard && summaryEl && summaryEl.innerHTML.includes('profile-avatar')) {
     pfCard.style.display = 'block';
     pfCard.innerHTML = summaryEl.innerHTML;
+  }
+}
+
+// ==================== ACTIVITY FEED (platform-wide, tab-submissions) ====================
+const ACTIVITY_META = {
+  bounty_posted:    { icon: '🎯', verb: 'posted a bounty' },
+  clip_submitted:   { icon: '📎', verb: 'submitted a clip' },
+  vote_cast:        { icon: '👍', verb: 'voted on a submission' },
+  winner_picked:    { icon: '🏆', verb: 'picked winner(s)' },
+  vote_resolved:    { icon: '🏁', verb: 'resolved a community vote' },
+  reward_claimed:   { icon: '💰', verb: 'claimed a reward' },
+  bounty_cancelled: { icon: '🚫', verb: 'cancelled a bounty' },
+  comment_posted:   { icon: '💬', verb: 'commented' }
+};
+
+function activityText(row) {
+  const meta = ACTIVITY_META[row.action_type] || { icon: '⚡', verb: row.action_type };
+  const d = row.detail || {};
+  switch (row.action_type) {
+    case 'bounty_posted':  return `${meta.verb}${d.streamTitle ? ': "' + escHtml(d.streamTitle) + '"' : ''}${d.reward ? ` — <b>${escHtml(String(d.reward))} $BLAZE</b>` : ''}`;
+    case 'clip_submitted': return meta.verb;
+    case 'winner_picked':  return `${meta.verb} (${d.winners || 1})${d.totalAmount ? ` — <b>${escHtml(String(d.totalAmount))} $BLAZE</b>` : ''}`;
+    case 'reward_claimed': return `${meta.verb}${d.amount ? ` — <b>${escHtml(String(d.amount))} $BLAZE</b>` : ''}`;
+    case 'comment_posted': return `${meta.verb}${d.message ? `: "${escHtml(d.message)}"` : ''}`;
+    default: return meta.verb;
+  }
+}
+
+async function loadActivityFeed() {
+  const el = document.getElementById('activity-feed-list');
+  if (!el) return;
+  el.innerHTML = '<p style="color:var(--muted);font-size:0.85rem;">Loading activity…</p>';
+  try {
+    initSupabase();
+    const { data, error } = await db.from('activity_log').select('*').order('created_at', { ascending: false }).limit(60);
+    if (error) throw error;
+    if (!data || data.length === 0) { el.innerHTML = '<p style="color:var(--muted);font-size:0.85rem;">No activity yet — be the first to post or submit a bounty.</p>'; return; }
+
+    // Resolve actor profiles (username + Blaze avatar), one lookup per distinct wallet
+    const wallets = [...new Set(data.map(r => r.actor_wallet))];
+    const profiles = {};
+    await Promise.all(wallets.map(async w => { profiles[w] = await fetchStreamerProfile(w); }));
+
+    el.innerHTML = data.map(row => {
+      const p = profiles[row.actor_wallet] || {};
+      const name = p.handle || (row.actor_wallet.slice(0,6) + '…' + row.actor_wallet.slice(-4));
+      const meta = ACTIVITY_META[row.action_type] || { icon: '⚡' };
+      return `
+      <div class="activity-item" ${row.bounty_id !== null ? `onclick="showPage('bounty-detail');openBountyDetail(${row.bounty_id})"` : ''}>
+        ${p.avatar
+          ? `<img src="${escHtml(p.avatar)}" class="activity-avatar" onerror="this.style.display='none'"/>`
+          : `<div class="activity-avatar-fallback">🎬</div>`}
+        <div class="activity-body">
+          <div class="activity-text"><span class="activity-icon">${meta.icon}</span> <b>${escHtml(name)}</b> ${activityText(row)}${row.bounty_id !== null ? ` <span style="color:var(--muted);">· Bounty #${row.bounty_id}</span>` : ''}</div>
+          <div class="activity-time">${timeAgo(Math.floor(new Date(row.created_at).getTime()/1000))}</div>
+        </div>
+      </div>`;
+    }).join('');
+  } catch(e) {
+    el.innerHTML = `<p style="color:var(--red);font-size:0.85rem;">Could not load activity feed.</p>`;
+  }
+}
+
+async function loadMyStats() {
+  const grid = document.getElementById('pf-stats-grid');
+  if (!grid || !userAddress || !escrowRead) return;
+  try {
+    const reader = escrowRead;
+    const count = Number(await reader.bountyCount());
+    let bountiesPosted = 0, blazeLocked = 0n, submissionsMade = 0, wins = 0, claimable = 0n;
+    const wallet = userAddress.toLowerCase();
+
+    for (let i = 0; i < count; i++) {
+      const [b, subs, c] = await Promise.all([
+        reader.getBounty(i),
+        reader.getSubmissions(i),
+        reader.getClaimable(userAddress, i).catch(() => 0n)
+      ]);
+      if (b.streamer.toLowerCase() === wallet) { bountiesPosted++; blazeLocked += b.reward; }
+      const mine = subs.find(s => s.clipper.toLowerCase() === wallet);
+      if (mine) { submissionsMade++; if (mine.isWinner) wins++; }
+      claimable += c;
+    }
+
+    // Off-chain interaction counts from Supabase
+    initSupabase();
+    const [{ count: commentCount }, { data: claimRows }] = await Promise.all([
+      db.from('bounty_comments').select('*', { count: 'exact', head: true }).eq('wallet', wallet),
+      db.from('activity_log').select('detail').eq('actor_wallet', wallet).eq('action_type', 'reward_claimed')
+    ]);
+    const lifetimeEarned = (claimRows || []).reduce((sum, r) => sum + (parseFloat(r.detail?.amount) || 0), 0);
+
+    grid.innerHTML = `
+      <div class="pf-stat-card"><div class="pf-stat-num">${bountiesPosted}</div><div class="pf-stat-label">Bounties Posted</div></div>
+      <div class="pf-stat-card"><div class="pf-stat-num">${ethers.formatUnits(blazeLocked, blazeDecimals || 18)}</div><div class="pf-stat-label">$BLAZE Posted in Bounties</div></div>
+      <div class="pf-stat-card"><div class="pf-stat-num">${submissionsMade}</div><div class="pf-stat-label">Clips Submitted</div></div>
+      <div class="pf-stat-card"><div class="pf-stat-num">${wins}</div><div class="pf-stat-label">Bounties Won</div></div>
+      <div class="pf-stat-card"><div class="pf-stat-num">${ethers.formatUnits(claimable, blazeDecimals || 18)}</div><div class="pf-stat-label">Unclaimed $BLAZE</div></div>
+      <div class="pf-stat-card"><div class="pf-stat-num">${lifetimeEarned.toLocaleString()}</div><div class="pf-stat-label">$BLAZE Earned (since tracking)</div></div>
+      <div class="pf-stat-card"><div class="pf-stat-num">${commentCount || 0}</div><div class="pf-stat-label">Comments Posted</div></div>
+    `;
+  } catch(e) {
+    grid.innerHTML = `<p style="color:var(--muted);font-size:0.8rem;">Could not load stats.</p>`;
   }
 }
 
@@ -1565,8 +1694,8 @@ function switchTab(tabId, clickedEl) {
     document.getElementById(navMap[tabId])?.classList.add('active');
   }
   if (tabId === 'tab-bounties-dash') loadBounties();
-  if (tabId === 'tab-submissions') loadMySubmissions();
-  if (tabId === 'tab-profile') loadProfileTab();
+  if (tabId === 'tab-submissions') loadActivityFeed();
+  if (tabId === 'tab-profile') { loadProfileTab(); loadMyStats(); }
   if (tabId === 'tab-post') loadPbXHandle();
 }
 
@@ -1584,7 +1713,7 @@ const exposed = { connectWallet, disconnectWallet, showPage, switchTab, postBoun
   goBackFromBounty, setMobileActive, saveProfile, renderWinnerAmountInputs, autoDesc, setPbDuration,
   fetchStreamerProfile, enrichBountyCard, loadProfileTab, linkBlazeToWallet, disconnectBlaze, updateBlazeUI,
   loadPlatformStats, enrichSubmissionCard, setReqMode, addReqItem, loadPbXHandle, shareBounty, postComment,
-  toggleFlagBox, submitFlag };
+  toggleFlagBox, submitFlag, loadActivityFeed };
 Object.assign(window, exposed);
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -2133,7 +2262,7 @@ textarea { resize: vertical; min-height: 76px; }
   <div class="dash-tabbar">
     <div class="dash-tab active" id="nav-overview"      onclick="switchTab('tab-overview',this)">⚡ Overview</div>
     <div class="dash-tab"        id="nav-bounties-dash"  onclick="switchTab('tab-bounties-dash',this)">🎯 Bounties</div>
-    <div class="dash-tab"        id="nav-submissions"    onclick="switchTab('tab-submissions',this)">📎 My Clips</div>
+    <div class="dash-tab"        id="nav-submissions"    onclick="switchTab('tab-submissions',this)">⚡ Activity</div>
     <div class="dash-tab"        id="nav-post"           onclick="switchTab('tab-post',this)">➕ Post</div>
     <div class="dash-tab"        id="nav-profile"        onclick="switchTab('tab-profile',this)">👤 Profile</div>
   </div>
@@ -2234,8 +2363,19 @@ textarea { resize: vertical; min-height: 76px; }
 
     <!-- MY SUBMISSIONS -->
     <div id="tab-submissions" class="tab-content" style="display:none;">
-      <div class="page-header"><h2>My Clips</h2><p>All clips you've submitted, and any unclaimed rewards.</p></div>
-      <div id="my-submissions-list"></div>
+      <div class="pg-banner">
+        <div class="pg-banner-row">
+          <div>
+            <div class="pg-banner-title">Activity</div>
+            <div class="pg-banner-sub">Everything happening on BlazeDAO right now — bounties, submissions, votes, wins, comments.</div>
+          </div>
+          <img src="https://raw.githubusercontent.com/precidoboss/my-game-sprites/main/24333f4f-66da-4d04-a37e-e03d4c992228-removebg-preview.png" class="pg-banner-mascot" onerror="this.style.display='none'" alt=""/>
+        </div>
+      </div>
+      <div style="display:flex;justify-content:flex-end;margin-bottom:10px;">
+        <button class="btn btn-ghost btn-sm" onclick="loadActivityFeed()">↻ Refresh</button>
+      </div>
+      <div id="activity-feed-list"></div>
     </div>
 
     <!-- POST BOUNTY -->
@@ -2405,6 +2545,14 @@ textarea { resize: vertical; min-height: 76px; }
     <div id="tab-profile" class="tab-content" style="display:none;">
       <div class="page-header"><h2>My Profile</h2><p>Your identity — linked from Blaze and stored off-chain.</p></div>
       <div id="pf-blaze-card" class="dash-profile-card" style="margin-bottom:16px;display:none;"></div>
+
+      <div class="pf-stats-section">
+        <div class="pf-stats-title">📊 Your Platform Stats</div>
+        <div id="pf-stats-grid" class="pf-stats-grid">
+          <p style="color:var(--muted);font-size:0.8rem;grid-column:1/-1;">Connect your wallet to see your stats.</p>
+        </div>
+      </div>
+
       <div class="form-group">
         <label>Display username</label>
         <input type="text" id="pf-username" placeholder="yourname"/>
@@ -2676,6 +2824,26 @@ textarea { resize: vertical; min-height: 76px; }
   transition:border-color 0.15s;
 }
 .vod-row:hover { border-color:rgba(255,107,26,0.4); }
+
+/* ── PROFILE STATS ── */
+.pf-stats-section { margin-bottom:20px; }
+.pf-stats-title { font-size:0.78rem;font-weight:800;text-transform:uppercase;letter-spacing:0.05em;color:var(--muted);margin-bottom:10px; }
+.pf-stats-grid { display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px; }
+.pf-stat-card { background:var(--card);border:1px solid var(--border);border-radius:12px;padding:12px 14px; }
+.pf-stat-num { font-family:var(--font-display);font-size:1.35rem;color:var(--orange);line-height:1; }
+.pf-stat-label { font-size:0.64rem;color:var(--muted);text-transform:uppercase;letter-spacing:0.04em;margin-top:4px;line-height:1.3; }
+
+/* ── ACTIVITY FEED ── */
+.activity-item { display:flex;gap:10px;align-items:flex-start;background:var(--card);border:1px solid var(--border);border-radius:10px;padding:12px 14px;margin-bottom:8px;cursor:pointer;transition:border-color 0.15s; }
+.activity-item:hover { border-color:rgba(255,107,26,0.3); }
+.activity-avatar { width:34px;height:34px;border-radius:50%;object-fit:cover;flex-shrink:0;border:1.5px solid var(--border); }
+.activity-avatar-fallback { width:34px;height:34px;border-radius:50%;flex-shrink:0;background:rgba(255,107,26,0.12);border:1.5px solid var(--border);display:flex;align-items:center;justify-content:center;font-size:0.95rem; }
+.activity-body { flex:1;min-width:0; }
+.activity-text { font-size:0.82rem;line-height:1.4; }
+.activity-text b { color:var(--orange); }
+.activity-time { font-size:0.65rem;color:var(--muted);margin-top:3px; }
+.activity-icon { font-size:0.9rem;flex-shrink:0; }
+
 .vod-thumb {
   width:72px;height:42px;border-radius:6px;
   object-fit:cover;flex-shrink:0;background:rgba(255,107,26,0.1);
