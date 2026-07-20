@@ -726,7 +726,8 @@ async function fetchStreamerProfile(wallet) {
           isLive:      ch.live?.isLive  || false,
           viewers:     ch.live?.viewers || 0,
           followers:   ch.stats?.followers    || 0,
-          subscribers: ch.stats?.subscribers  || 0
+          subscribers: ch.stats?.subscribers  || 0,
+          lastStream:  ch.lastStream || null
         };
         streamerCache[wallet] = enriched;
         // Re-enrich any already-rendered cards with the richer data
@@ -1326,10 +1327,12 @@ async function openBountyDetail(bountyId, opts) {
         <div class="bd-section-title">Submit Your Clip</div>
         <div class="bd-section-body">
           <p style="font-size:0.8rem;color:var(--muted);margin-bottom:10px;">Clip the moment from the streamer's Blaze stream, post it to X, then paste your X link below.</p>
+          <div id="bd-clip-verify-warning" style="display:none;"></div>
           <div class="form-group">
             <label>Your X clip link</label>
             <input type="text" id="bd-clip-link" placeholder="https://x.com/yourname/status/..."/>
           </div>
+          <p class="pb-hint">Only <b>verified</b> X accounts can submit, and the link must be posted from your own connected X account — we check the username in the link against your verified handle.</p>
           <button class="btn btn-primary" style="width:100%;" onclick="submitClip(${bountyId})">📎 Submit Clip</button>
           <div id="tx-submit" class="tx-status" style="display:none;"></div>
         </div>
@@ -1388,6 +1391,7 @@ async function openBountyDetail(bountyId, opts) {
     enrichBountyDetailStreamer(bountyId, b.streamer, isStreamer);
     loadComments(bountyId);
     if (isStreamer) loadSubmissionFlags(bountyId);
+    if (isOpen && !isStreamer && !deadlinePassed) checkClipSubmitEligibility(bountyId);
 
   } catch(e) {
     el.innerHTML = `<div class="bd-error"><div style="font-size:1.5rem;margin-bottom:8px;">⚠️</div><div>${escHtml(friendlyError(e))}</div></div>`;
@@ -1577,6 +1581,7 @@ async function enrichBountyDetailStreamer(bountyId, wallet, isStreamer) {
           ${info.followers ? `<span style="font-size:0.68rem;color:var(--muted);">👥 ${Number(info.followers).toLocaleString()} followers</span>` : ''}
           ${info.subscribers ? `<span style="font-size:0.68rem;color:var(--muted);">⭐ ${Number(info.subscribers).toLocaleString()} subs</span>` : ''}
         </div>
+        ${!info.isLive && info.lastStream ? `<div style="font-size:0.68rem;color:var(--muted);margin-top:4px;">🎬 Last stream: ${escHtml(info.lastStream.title || 'Untitled')}${info.lastStream.recordedAt ? ' · ' + timeAgo(Math.floor(new Date(info.lastStream.recordedAt).getTime()/1000)) : ''}</div>` : ''}
       </div>
       ${info.isLive ? `<span class="bd-live-badge">🔴 LIVE</span>` : ''}
     </div>`;
@@ -1869,11 +1874,70 @@ async function resolveCommunityVote(bountyId) {
   } catch(e) { toast(friendlyError(e), 'error'); }
 }
 
+// Path segments that show up in x.com/twitter.com URLs but are never a
+// username, so a link like x.com/i/status/... doesn't get misread.
+const X_RESERVED_PATHS = ['i', 'home', 'search', 'explore', 'notifications', 'messages', 'settings', 'compose', 'intent', 'share'];
+
+function extractXUsernameFromLink(link) {
+  const m = link.match(/^https?:\/\/(?:www\.)?(?:x\.com|twitter\.com)\/([A-Za-z0-9_]{1,15})(?:\/|$)/i);
+  if (!m) return null;
+  const handle = m[1].toLowerCase();
+  return X_RESERVED_PATHS.includes(handle) ? null : handle;
+}
+
+// Shows a heads-up on the bounty page if the connected wallet hasn't
+// verified an X account yet — submitClip() enforces the actual rule.
+async function checkClipSubmitEligibility(bountyId) {
+  const warnEl = document.getElementById('bd-clip-verify-warning');
+  if (!warnEl) return;
+  if (!userAddress) {
+    warnEl.style.display = 'block';
+    warnEl.innerHTML = `<div class="bd-notice">🔒 Connect your wallet to submit a clip.</div>`;
+    return;
+  }
+  try {
+    initSupabase();
+    const { data } = await db.from('profiles').select('x_handle, x_verified').eq('wallet', userAddress.toLowerCase()).maybeSingle();
+    if (!data?.x_verified || !data?.x_handle) {
+      warnEl.style.display = 'block';
+      warnEl.innerHTML = `<div class="bd-notice">🔒 Verify your X account before submitting a clip. <a href="#" onclick="event.preventDefault();showPage('dashboard');switchTab('tab-profile',document.getElementById('nav-profile'));openEditProfile();" style="color:var(--orange);font-weight:700;">Verify now →</a></div>`;
+    } else {
+      warnEl.style.display = 'block';
+      warnEl.innerHTML = `<div class="bd-notice" style="border-color:rgba(34,197,94,0.3);color:var(--success);">✓ Verified as @${escHtml(data.x_handle)} — submit a post from this account.</div>`;
+    }
+  } catch (e) { warnEl.style.display = 'none'; }
+}
+
 async function submitClip(bountyId) {
   const link = document.getElementById('bd-clip-link')?.value.trim();
   if (!link || !/^https?:\/\/(x\.com|twitter\.com)\//i.test(link)) {
     toast('Paste a valid X (twitter.com / x.com) link', 'error'); return;
   }
+  if (!userAddress) { toast('Connect your wallet first', 'error'); return; }
+
+  // Only a verified X account may submit, and the link must be posted from
+  // that same account — the username in the link has to match the verified handle.
+  let profile;
+  try {
+    initSupabase();
+    const { data } = await db.from('profiles').select('x_handle, x_verified').eq('wallet', userAddress.toLowerCase()).maybeSingle();
+    profile = data;
+  } catch (e) { profile = null; }
+
+  if (!profile?.x_verified || !profile?.x_handle) {
+    toast('Verify your X account in your profile before submitting a clip', 'error');
+    showPage('dashboard'); switchTab('tab-profile', document.getElementById('nav-profile')); openEditProfile();
+    return;
+  }
+
+  const linkUsername = extractXUsernameFromLink(link);
+  const verifiedHandle = profile.x_handle.replace(/^@/, '').toLowerCase();
+  if (!linkUsername) { toast('Could not read a username from that link — paste your actual post link', 'error'); return; }
+  if (linkUsername !== verifiedHandle) {
+    toast(`That link is from @${linkUsername}, but your verified X account is @${verifiedHandle}. Submit a post from your own account.`, 'error');
+    return;
+  }
+
   try {
     setTxStatus('tx-submit', 'Submitting clip…', 'info');
     const tx = await escrow.submitClip(bountyId, link);
@@ -4046,6 +4110,7 @@ textarea { resize: vertical; min-height: 76px; }
     <div class="docs-nav">
       <a href="#" onclick="event.preventDefault();document.getElementById('doc-what').scrollIntoView({behavior:'smooth'})">What is BlazeDAO</a>
       <a href="#" onclick="event.preventDefault();document.getElementById('doc-how').scrollIntoView({behavior:'smooth'})">How It Works</a>
+      <a href="#" onclick="event.preventDefault();document.getElementById('doc-x-verify').scrollIntoView({behavior:'smooth'})">X Verification</a>
       <a href="#" onclick="event.preventDefault();document.getElementById('doc-api').scrollIntoView({behavior:'smooth'})">Blaze API Usage</a>
       <a href="#" onclick="event.preventDefault();document.getElementById('doc-contracts').scrollIntoView({behavior:'smooth'})">Smart Contracts</a>
       <a href="#" onclick="event.preventDefault();document.getElementById('doc-testnet').scrollIntoView({behavior:'smooth'})">Testnet Status</a>
@@ -4067,14 +4132,21 @@ textarea { resize: vertical; min-height: 76px; }
     <div class="docs-section" id="doc-how">
       <div class="docs-section-title">How It Works</div>
       <div class="docs-card"><h4>1. Sign Up</h4><p>Connect your EVM wallet and link your Blaze.stream account via OAuth. Your Blaze identity is verified server-side — username, avatar, and channel stats pulled directly from the Blaze API. No NFT minting required.</p></div>
-      <div class="docs-card"><h4>2. Streamer Posts Bounty</h4><p>Streamers lock $BLAZE in escrow via smart contract. The bounty is tied to a specific Blaze VOD (picked from real VOD history via the Blaze API). Two modes: Streamer Picks or Community Vote.</p></div>
-      <div class="docs-card"><h4>3. Clippers Submit</h4><p>Clippers watch the Blaze stream, clip the best moment, post it to X, and submit the X link on-chain. The submission is recorded immutably on Avalanche. Clippers see real live status and follower counts powered by the Blaze API.</p></div>
-      <div class="docs-card"><h4>4. Winner Picked</h4><p>Streamer reviews submissions and picks winner(s) with custom $BLAZE splits. In Community Vote mode, the contract resolves automatically once the deadline passes. Ties are handled on-chain.</p></div>
-      <div class="docs-card"><h4>5. Automatic Payout</h4><p>Winning clipper(s) call claim() and receive their $BLAZE directly in their wallet. Pull-payment pattern — no manual payment, no platform fee, no trust required.</p></div>
+      <div class="docs-card"><h4>2. Verify Your X Account</h4><p>Clippers additionally verify ownership of an X (Twitter) account from their Profile page. This isn't optional cosmetics — <b>only a verified X account can submit clips</b>, and every submission's link must be posted from that exact verified account. The username in the link is checked against your verified handle before the submission goes on-chain, so a bounty can't be gamed with a link copied from someone else's post.</p></div>
+      <div class="docs-card"><h4>3. Streamer Posts Bounty</h4><p>Streamers lock $BLAZE in escrow via smart contract. The bounty is tied to a specific Blaze VOD (picked from real VOD history via the Blaze API). Two modes: Streamer Picks or Community Vote.</p></div>
+      <div class="docs-card"><h4>4. Clippers Submit</h4><p>Clippers watch the Blaze stream, clip the best moment, post it to X, and submit the X link on-chain. The submission is recorded immutably on Avalanche. Clippers see real live status and follower counts powered by the Blaze API.</p></div>
+      <div class="docs-card"><h4>5. Winner Picked</h4><p>Streamer reviews submissions and picks winner(s) with custom $BLAZE splits. In Community Vote mode, the contract resolves automatically once the deadline passes. Ties are handled on-chain.</p></div>
+      <div class="docs-card"><h4>6. Automatic Payout</h4><p>Winning clipper(s) call claim() and receive their $BLAZE directly in their wallet. Pull-payment pattern — no manual payment, no platform fee, no trust required.</p></div>
+    </div>
+    <div class="docs-section" id="doc-x-verify">
+      <div class="docs-section-title">𝕏 X Account Verification</div>
+      <div class="docs-card"><p>Every clip submission is tied to a real, verified X identity — not just a pasted link. From <b>Profile → Edit Profile</b>, connect your X account through OAuth. Once verified, your handle is stored against your wallet in Supabase (<span class="docs-code" style="display:inline;padding:2px 6px;">profiles.x_handle</span> / <span class="docs-code" style="display:inline;padding:2px 6px;">profiles.x_verified</span>).</p></div>
+      <div class="docs-card" style="margin-top:10px;"><h4>What gets enforced</h4><p>Before a clip submission reaches the smart contract, BlazeDAO checks two things: (1) the connected wallet has a <code>x_verified = true</code> profile, and (2) the username parsed out of the submitted x.com / twitter.com link matches the verified handle exactly. If either check fails, the submission is blocked client-side with an explanation — the streamer never even has to review a spoofed link.</p></div>
+      <div class="docs-card" style="margin-top:10px;"><h4>Why it matters</h4><p>Without this, anyone could paste someone else's viral X post into a bounty and claim the reward. Tying submissions to a verified, wallet-linked X identity keeps the "did this person actually make this clip" question answered on-chain rather than on trust.</p></div>
     </div>
     <div class="docs-section" id="doc-api">
       <div class="docs-section-title">Blaze API Usage</div>
-      <div class="docs-card" style="margin-bottom:14px;"><p>BlazeDAO integrates Blaze's developer API throughout the entire user journey — identity verification, live stream data, VOD history, clips, and channel stats. This is the core of our Blaze Builder Challenge entry.</p></div>
+      <div class="docs-card" style="margin-bottom:14px;"><p>BlazeDAO integrates Blaze's developer API (<a href="https://dev.blaze.stream/docs" target="_blank" rel="noreferrer" style="color:var(--orange);">dev.blaze.stream/docs</a>) throughout the entire user journey — identity verification, live stream data, VOD history, clips, and channel stats. This is the core of our Blaze Builder Challenge entry.</p></div>
       <div class="docs-card">
         <h4 style="margin-bottom:12px;">Authentication &amp; Identity</h4>
         <div class="docs-api-row"><span class="docs-method docs-method-post">POST</span><div><div class="docs-api-path">blaze.stream/bapi/oauth2/generate-auth-url</div><div class="docs-api-desc">Generates a PKCE auth URL for user login — the primary identity mechanism replacing wallet-only sign-up.</div></div></div>
@@ -4084,13 +4156,19 @@ textarea { resize: vertical; min-height: 76px; }
       <div class="docs-card" style="margin-top:10px;">
         <h4 style="margin-bottom:12px;">Profile &amp; Channel Data</h4>
         <div class="docs-api-row"><span class="docs-method docs-method-get">GET</span><div><div class="docs-api-path">api.blaze.stream/v1/users/profile</div><div class="docs-api-desc">Authenticated user profile — username, displayName, avatarUrl, user ID. Powers dashboard profile card, nav badge, and bounty card streamer info.</div></div></div>
-        <div class="docs-api-row"><span class="docs-method docs-method-get">GET</span><div><div class="docs-api-path">api.blaze.stream/v1/channels/{channelId}/stats</div><div class="docs-api-desc">Follower count, subscriber count, total views. Shown on dashboard overview and bounty cards as social proof.</div></div></div>
-        <div class="docs-api-row"><span class="docs-method docs-method-get">GET</span><div><div class="docs-api-path">api.blaze.stream/v1/channels/{channelId}/live-stats</div><div class="docs-api-desc">Real-time live status, viewer count, stream title. Powers the pulsing LIVE badge on bounty cards and live viewer count on overview.</div></div></div>
-        <div class="docs-api-row"><span class="docs-method docs-method-get">GET</span><div><div class="docs-api-path">api.blaze.stream/v1/channels/{channelId}/vods</div><div class="docs-api-desc">Recent VODs with titles, durations, thumbnails. Streamers pick which VOD their bounty targets — one click auto-fills the bounty form.</div></div></div>
+        <div class="docs-api-row"><span class="docs-method docs-method-get">GET</span><div><div class="docs-api-path">api.blaze.stream/v1/channels/stats</div><div class="docs-api-desc">Follower count, subscriber count, viewer count for the authorized channel (User Access Token — no channelId needed). Shown on dashboard overview and bounty cards as social proof.</div></div></div>
+        <div class="docs-api-row"><span class="docs-method docs-method-get">GET</span><div><div class="docs-api-path">api.blaze.stream/v1/channels/live-stats</div><div class="docs-api-desc">Real-time live status, viewer count, and stream start time. Powers the pulsing LIVE badge on bounty cards and live viewer count on overview.</div></div></div>
+        <div class="docs-api-row"><span class="docs-method docs-method-get">GET</span><div><div class="docs-api-path">api.blaze.stream/v1/channels/vods?channelId=</div><div class="docs-api-desc">Recent VODs with titles, durations, and thumbnails. Streamers pick which VOD their bounty targets, and the most recent VOD powers the "Last stream" indicator shown on the bounty detail page when a streamer isn't currently live.</div></div></div>
         <div class="docs-api-row"><span class="docs-method docs-method-get">GET</span><div><div class="docs-api-path">api.blaze.stream/v1/channels/clips?channelId=</div><div class="docs-api-desc">Recent Blaze clips — clipId, title, viewCount, previewImgUrl. Shown as channel activity. Planned: use clipId to verify a submitted X clip originated from this Blaze channel.</div></div></div>
+        <div class="docs-api-row"><span class="docs-method docs-method-get">GET</span><div><div class="docs-api-path">api.blaze.stream/v1/channels</div><div class="docs-api-desc">Cursor-paginated channel listing with live status, follower counts, and category — a candidate source for a future "discover live streamers with open bounties" view.</div></div></div>
+      </div>
+      <div class="docs-card" style="margin-top:10px;">
+        <h4 style="margin-bottom:12px;">On the roadmap from the same API surface</h4>
+        <p>The Channels API also exposes <span class="docs-code" style="display:inline;padding:2px 6px;">/channels/followers</span>, <span class="docs-code" style="display:inline;padding:2px 6px;">/channels/subscribers</span>, and <span class="docs-code" style="display:inline;padding:2px 6px;">/channels/activities</span> (new followers, subs, gifts, votes) for the authorized channel, plus a real-time Events/Socket.IO layer for live status changes instead of polling. We plan to use the activity feed for a "your channel today" digest, and the Events layer to flip the LIVE badge on bounty cards instantly instead of on a refresh.</p>
       </div>
     </div>
     <div class="docs-section" id="doc-contracts">
+
       <div class="docs-section-title">Smart Contracts</div>
       <div class="docs-card"><h4>ClipDAOEscrow — Fuji Testnet</h4><div class="docs-code">0xc515aaB3b3BBDC2313dc72e1603E0E1ccB419Ee1</div><p>Core escrow contract. Bounty creation, clip submission, voting, winner selection, pull-pattern payout. Built with ReentrancyGuard, Pausable, Ownable (OpenZeppelin v5). ERC-20 native ($BLAZE).</p></div>
       <div class="docs-card" style="margin-top:10px;"><h4>Mock $BLAZE Token — Fuji Testnet</h4><div class="docs-code">0x57BAEAC484A0F3d5694d81420402FE54D4fBfec7</div><p>Standard ERC-20 (18 decimals) for testnet. Includes faucet() with 1-hour cooldown minting 10,000 mBLAZE per claim. Will be replaced with real $BLAZE on mainnet.</p></div>
