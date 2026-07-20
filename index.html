@@ -11,7 +11,24 @@
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
 <script>
 // ==================== CONFIG ====================
-const SUPABASE_URL = 'https://riufeblffxwktujsvnsd.supabase.co';
+let SUPABASE_URL = '';
+let SUPABASE_KEY = '';
+(function loadRuntimeConfig() {
+  try {
+    const xhr = new XMLHttpRequest();
+    xhr.open('GET', '/api/config', false); // false = synchronous, blocks until it returns
+    xhr.send(null);
+    if (xhr.status === 200) {
+      const cfg = JSON.parse(xhr.responseText);
+      SUPABASE_URL = cfg.supabaseUrl || '';
+      SUPABASE_KEY = cfg.supabaseKey || '';
+    } else {
+      console.error('Could not load /api/config — status', xhr.status);
+    }
+  } catch (e) {
+    console.error('Could not load /api/config:', e.message);
+  }
+})();
 const REDIRECT_URI = window.location.href.split('?')[0];
 const X_REDIRECT_URI = REDIRECT_URI + '?provider=x'; // distinct from Blaze's redirect so callbacks can tell them apart
 
@@ -72,7 +89,7 @@ let bountyMetaCache = {};  // bountyId -> row from bounty_meta table
 let pbXHandleCache = null; // the connected wallet's saved X handle, loaded for the Post Bounty form
 
 function initSupabase() {
-  if (!db && window.supabase) db = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+  if (!db && window.supabase && SUPABASE_URL && SUPABASE_KEY) db = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 }
 
 function toast(msg, type='info') {
@@ -783,7 +800,7 @@ async function enrichBountyCard(bountyId, wallet) {
     el.innerHTML = `
       ${info.avatar ? `<img src="${escHtml(info.avatar)}" class="bc-streamer-avatar" onerror="this.style.display='none'"/>` : ''}
       <span class="bc-streamer-name">${escHtml(info.handle || wallet.slice(0,6)+'…'+wallet.slice(-4))}</span>
-      ${info.isLive ? `<span class="bc-live-inline">● LIVE</span><span style="font-size:0.63rem;color:var(--muted);">${info.viewers} viewers</span>` : ''}
+      ${info.isLive ? `<span class="bc-live-inline">● LIVE</span><span style="font-size:0.63rem;color:var(--muted);">${info.viewers} viewers</span>` : (info.lastStream ? `<span style="font-size:0.63rem;color:var(--muted);" title="${escHtml(info.lastStream.title||'')}">🎬 last stream ${info.lastStream.recordedAt ? timeAgo(Math.floor(new Date(info.lastStream.recordedAt).getTime()/1000)) : ''}</span>` : '')}
       ${info.followers ? `<span style="font-size:0.63rem;color:var(--muted);">${Number(info.followers).toLocaleString()} followers</span>` : ''}
     `;
   });
@@ -964,6 +981,59 @@ function setPbRewardPct(pct) {
   const slider = document.getElementById('pb-reward-slider');
   if (slider) slider.value = val;
   updatePbPctLabel(val);
+}
+
+// Pulls the streamer's real Blaze channel data (live status, follower count,
+// recent VODs) into the Post Bounty form — powered by /api/blaze/channel,
+// which calls the Blaze Channels API (dev.blaze.stream/docs/apis/channels).
+let pbVodCache = [];
+async function loadPbBlazeContext() {
+  const el = document.getElementById('pb-blaze-widget');
+  if (!el) return;
+  if (!userAddress) { el.innerHTML = ''; return; }
+  el.innerHTML = `<div class="pb-blaze-widget-loading">🔥 Loading your Blaze channel…</div>`;
+  try {
+    const ch = await fetch(`/api/blaze/channel?wallet=${userAddress}`).then(r => r.ok ? r.json() : null);
+    if (!ch || !ch.connected) {
+      el.innerHTML = `<div class="pb-blaze-widget pb-blaze-widget-empty">🔥 Connect your Blaze account to pull in live status, follower stats, and pick a VOD straight from your channel. <button class="btn btn-blaze-connect btn-sm" onclick="connectBlaze()">Connect Blaze</button></div>`;
+      return;
+    }
+    pbVodCache = ch.vods || [];
+    const statusLine = ch.live?.isLive
+      ? `<span class="pb-blaze-live">● LIVE NOW — ${ch.live.viewers || 0} viewers</span>`
+      : (ch.lastStream ? `<span>🎬 Last stream: ${escHtml(ch.lastStream.title || 'Untitled')}${ch.lastStream.recordedAt ? ' · ' + timeAgo(Math.floor(new Date(ch.lastStream.recordedAt).getTime()/1000)) : ''}</span>` : `<span style="color:var(--muted);">No recent stream data yet.</span>`);
+    const statsLine = [
+      ch.stats?.followers ? `👥 ${Number(ch.stats.followers).toLocaleString()} followers` : null,
+      ch.stats?.subscribers ? `⭐ ${Number(ch.stats.subscribers).toLocaleString()} subs` : null
+    ].filter(Boolean).join(' · ');
+
+    el.innerHTML = `
+      <div class="pb-blaze-widget">
+        <div class="pb-blaze-widget-top">
+          <span class="pb-blaze-widget-title">🔥 ${escHtml(ch.username || 'Your Blaze channel')}</span>
+          ${statusLine}
+        </div>
+        ${statsLine ? `<div class="pb-blaze-widget-stats">${statsLine}</div>` : ''}
+        ${pbVodCache.length ? `
+          <div class="pb-blaze-vod-label">Pick a VOD to link this bounty to:</div>
+          <div class="pb-blaze-vod-row">
+            ${pbVodCache.map((v, i) => `<button type="button" class="pb-blaze-vod-chip" onclick="pickPbVod(${i})" title="${escHtml(v.title || 'Untitled VOD')}">🎬 ${escHtml((v.title || 'Untitled VOD').slice(0, 28))}${(v.title || '').length > 28 ? '…' : ''}</button>`).join('')}
+          </div>` : `<div class="pb-blaze-vod-label" style="color:var(--muted);">No VODs found on your Blaze channel yet.</div>`}
+      </div>`;
+  } catch (e) {
+    el.innerHTML = '';
+  }
+}
+
+function pickPbVod(i) {
+  const v = pbVodCache[i];
+  if (!v) return;
+  const vodEl = document.getElementById('pb-vod');
+  if (vodEl) vodEl.value = v.url || v.title || '';
+  const titleEl = document.getElementById('pb-stream-title');
+  if (titleEl && !titleEl.value.trim() && v.title) titleEl.value = v.title;
+  document.querySelectorAll('.pb-blaze-vod-chip').forEach((c, idx) => c.classList.toggle('pb-blaze-vod-chip-active', idx === i));
+  toast('VOD linked to this bounty');
 }
 
 async function loadPbXHandle() {
@@ -1612,23 +1682,44 @@ function renderClipEmbed(link) {
   const tweetId = extractTweetId(link);
   if (tweetId) {
     const uid = 'tw_' + tweetId + '_' + Math.random().toString(36).slice(2,7);
-    setTimeout(() => {
+    const fallbackHTML = `<div class="clip-embed-fallback"><svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-4.714-6.231-5.401 6.231H2.742l7.73-8.835L1.254 2.25H8.08l4.258 5.636 5.906-5.636z"/></svg><a href="${escHtml(link)}" target="_blank" rel="noreferrer" class="clip-embed-link">${escHtml(link.replace('https://',''))}</a><a href="${escHtml(link)}" target="_blank" rel="noreferrer" class="btn btn-ghost btn-sm">↗ Open</a></div>`;
+    const mount = () => {
       const el = document.getElementById(uid);
-      if (!el) return;
-      if (window.twttr?.widgets) {
-        window.twttr.widgets.createTweet(tweetId, el, { theme:'dark', dnt:true, align:'center' });
-      } else if (!document.getElementById('twitter-wjs')) {
+      if (!el || !window.twttr?.widgets) return;
+      window.twttr.widgets.createTweet(tweetId, el, { theme:'dark', dnt:true, align:'center' }).then(iframeEl => {
+        const stillThere = document.getElementById(uid);
+        if (!stillThere) return; // card was re-rendered/removed before this resolved
+        if (!iframeEl) {
+          // Tweet couldn't be embedded (deleted, protected, age-restricted, etc.) — fall back to a plain link
+          stillThere.outerHTML = fallbackHTML;
+        } else {
+          // Remove the "Loading clip…" placeholder now that the real embed has mounted
+          stillThere.querySelectorAll('.clip-embed-loading').forEach(n => n.remove());
+        }
+      }).catch(() => {
+        const stillThere = document.getElementById(uid);
+        if (stillThere) stillThere.outerHTML = fallbackHTML;
+      });
+    };
+    setTimeout(() => {
+      if (window.twttr?.widgets) { mount(); return; }
+      if (!document.getElementById('twitter-wjs')) {
         const s = document.createElement('script');
         s.id = 'twitter-wjs'; s.charset = 'utf-8';
         s.src = 'https://platform.twitter.com/widgets.js';
-        s.onload = () => {
-          const el2 = document.getElementById(uid);
-          if (el2 && window.twttr?.widgets) window.twttr.widgets.createTweet(tweetId, el2, { theme:'dark', dnt:true, align:'center' });
-        };
+        s.onload = mount;
         document.head.appendChild(s);
+      } else {
+        // Script tag already exists (another embed triggered it) but twttr may not be ready yet — poll briefly
+        let tries = 0;
+        const iv = setInterval(() => {
+          tries++;
+          if (window.twttr?.widgets) { clearInterval(iv); mount(); }
+          else if (tries > 20) clearInterval(iv); // ~3s — give up quietly, loading text stays as a safe fallback
+        }, 150);
       }
     }, 150);
-    return `<div id="${uid}" class="clip-embed-tweet"><div style="color:var(--muted);font-size:0.78rem;">Loading clip…</div></div>`;
+    return `<div id="${uid}" class="clip-embed-tweet"><div class="clip-embed-loading" style="color:var(--muted);font-size:0.78rem;">Loading clip…</div></div>`;
   }
   // Fallback chip for non-X links
   return `<div class="clip-embed-fallback"><svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-4.714-6.231-5.401 6.231H2.742l7.73-8.835L1.254 2.25H8.08l4.258 5.636 5.906-5.636z"/></svg><a href="${escHtml(link)}" target="_blank" rel="noreferrer" class="clip-embed-link">${escHtml(link.replace('https://',''))}</a><a href="${escHtml(link)}" target="_blank" rel="noreferrer" class="btn btn-ghost btn-sm">↗ Open</a></div>`;
@@ -2404,7 +2495,7 @@ function switchTab(tabId, clickedEl, opts) {
   if (tabId === 'tab-bounties-dash') loadBounties();
   if (tabId === 'tab-submissions') loadActivityFeed();
   if (tabId === 'tab-profile') { loadProfileTab(); loadMyStats(); loadMyBountiesList(); loadMySubmissionsList(); }
-  if (tabId === 'tab-post') { loadPbXHandle(); loadPbBalance(); restorePostDraft(); }
+  if (tabId === 'tab-post') { loadPbXHandle(); loadPbBalance(); restorePostDraft(); loadPbBlazeContext(); }
   if (!opts.skipUrl) history.pushState({ tabId }, '', TAB_PATH[tabId] || '/dashboard');
 }
 
@@ -3293,8 +3384,9 @@ textarea { resize: vertical; min-height: 76px; }
       <div class="pb-section">
         <div class="pb-section-label"><span class="pb-step">2</span> Source Stream / VOD <span class="pb-optional">optional but recommended</span></div>
         <div class="pb-section-body">
+          <div id="pb-blaze-widget"></div>
           <input type="text" id="pb-vod" placeholder="Paste your Blaze stream link, VOD title, or leave blank for latest stream"/>
-          <p class="pb-hint">Clippers will use this to know which stream to source their clip from.</p>
+          <p class="pb-hint">Clippers will use this to know which stream to source their clip from. Pick a VOD from your Blaze channel above and this fills in automatically.</p>
         </div>
       </div>
 
