@@ -128,11 +128,18 @@ function friendlyError(e) {
 }
 
 // ==================== WALLET ====================
-async function connectWallet() {
-  if (!window.ethereum) { toast('No wallet found. Install Core or MetaMask.', 'error'); return; }
+async function connectWallet(opts) {
+  opts = opts || {};
+  if (!window.ethereum) { if (!opts.silent) toast('No wallet found. Install Core or MetaMask.', 'error'); return; }
   try {
     provider = new ethers.BrowserProvider(window.ethereum);
-    await provider.send('eth_requestAccounts', []);
+    if (opts.silent) {
+      // Silent reconnect on page load — only use accounts already authorized, never prompt
+      const accts = await provider.send('eth_accounts', []);
+      if (!accts || !accts.length) return;
+    } else {
+      await provider.send('eth_requestAccounts', []);
+    }
     await switchToFuji();
     signer = await provider.getSigner();
     userAddress = await signer.getAddress();
@@ -144,11 +151,11 @@ async function connectWallet() {
     if (blazeProfile?.id || sessionStorage.getItem('pending_blaze_user_id')) {
       await linkBlazeToWallet(userAddress);
     }
-    toast('Wallet connected');
+    if (!opts.silent) toast('Wallet connected');
     loadBounties();
     checkBlazeStatus();
   } catch (e) {
-    toast(friendlyError(e), 'error');
+    if (!opts.silent) toast(friendlyError(e), 'error');
   }
 }
 
@@ -173,8 +180,11 @@ async function switchToFuji() {
 
 function disconnectWallet() {
   provider = signer = userAddress = escrow = blaze = null;
+  postDraftRestored = false;
+  lastPostDraftSaved = null;
   updateNavWallet();
   toast('Disconnected');
+  if (window.location.pathname.startsWith('/dashboard')) showPage('home');
 }
 
 function initContracts() {
@@ -188,33 +198,74 @@ function initContracts() {
 }
 
 function updateNavWallet() {
-  const addrEl = document.getElementById('nav-addr');
   const connectBtn = document.getElementById('btn-connect');
-  const dashBtn = document.getElementById('btn-dashboard');
-  const discBtn = document.getElementById('btn-disconnect');
+  const accountMenu = document.getElementById('account-menu');
   const blazeBtn = document.getElementById('btn-blaze');
   const heroConnect = document.getElementById('hero-connect-btn');
   const heroDash = document.getElementById('hero-dashboard-btn');
+  const badge = document.getElementById('blaze-connected-badge');
+  // Drawer's dashboard-only links only make sense once a wallet is connected
+  const dashLabel = document.getElementById('drawer-dash-label');
+  const dashLinks = ['drawer-overview','drawer-bounties-dash','drawer-post','drawer-submissions','drawer-profile'];
   if (userAddress) {
-    addrEl.textContent = userAddress.slice(0,6)+'…'+userAddress.slice(-4);
-    addrEl.style.display = 'inline-block';
     connectBtn.style.display = 'none';
-    dashBtn.style.display = 'inline-flex';
-    discBtn.style.display = 'inline-flex';
+    if (accountMenu) accountMenu.style.display = 'flex';
+    if (badge && !badge.innerHTML.trim()) {
+      badge.innerHTML = `<span style="width:18px;height:18px;border-radius:50%;background:rgba(255,107,26,0.15);display:inline-flex;align-items:center;justify-content:center;font-size:0.65rem;">🔑</span> ${userAddress.slice(0,6)}…${userAddress.slice(-4)}`;
+    }
     if (blazeBtn) blazeBtn.style.display = 'inline-flex';
     if (heroConnect) heroConnect.style.display = 'none';
     if (heroDash) heroDash.style.display = 'inline-flex';
+    if (dashLabel) dashLabel.style.display = 'block';
+    dashLinks.forEach(id => { const el = document.getElementById(id); if (el) el.style.display = 'flex'; });
     checkBlazeStatus();
   } else {
-    addrEl.style.display = 'none';
     connectBtn.style.display = 'inline-flex';
-    dashBtn.style.display = 'none';
-    discBtn.style.display = 'none';
+    if (accountMenu) accountMenu.style.display = 'none';
+    if (badge) badge.innerHTML = '';
     if (blazeBtn) blazeBtn.style.display = 'none';
     if (heroConnect) heroConnect.style.display = 'inline-flex';
     if (heroDash) heroDash.style.display = 'none';
+    if (dashLabel) dashLabel.style.display = 'none';
+    dashLinks.forEach(id => { const el = document.getElementById(id); if (el) el.style.display = 'none'; });
   }
 }
+
+// ==================== HAMBURGER / DRAWER NAV ====================
+function toggleDrawer() {
+  const open = document.getElementById('side-drawer').classList.contains('open');
+  if (open) closeDrawer(); else openDrawer();
+}
+function openDrawer() {
+  document.getElementById('side-drawer')?.classList.add('open');
+  document.getElementById('drawer-overlay')?.classList.add('open');
+  document.getElementById('hamburger-btn')?.classList.add('open');
+  document.body.style.overflow = 'hidden';
+}
+function closeDrawer() {
+  document.getElementById('side-drawer')?.classList.remove('open');
+  document.getElementById('drawer-overlay')?.classList.remove('open');
+  document.getElementById('hamburger-btn')?.classList.remove('open');
+  document.body.style.overflow = '';
+}
+function drawerGo(page) { closeDrawer(); showPage(page); }
+function drawerGoTab(tabId, navId) {
+  closeDrawer();
+  showPage('dashboard');
+  setTimeout(() => switchTab(tabId, document.getElementById(navId)), 0);
+}
+
+// ==================== ACCOUNT DROPDOWN (Blaze/profile badge) ====================
+function toggleAccountMenu(e) {
+  e.stopPropagation();
+  document.getElementById('account-dropdown')?.classList.toggle('open');
+}
+function closeAccountMenu() {
+  document.getElementById('account-dropdown')?.classList.remove('open');
+}
+document.addEventListener('click', e => {
+  if (!e.target.closest('.account-menu')) closeAccountMenu();
+});
 
 // ==================== BLAZE.STREAM CONNECT ====================
 function connectBlaze() {
@@ -251,13 +302,12 @@ async function checkBlazeStatus() {
       if (badge) {
         const av = data.avatar ? `<img src="${escHtml(data.avatar)}" style="width:18px;height:18px;border-radius:50%;object-fit:cover;border:1px solid rgba(255,107,26,0.4);" onerror="this.style.display='none'"/>` : '<svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>';
         badge.innerHTML = av + ' ' + escHtml(data.handle || 'Blaze');
-        badge.style.display = 'inline-flex';
       }
       if (btn) btn.style.display = 'none';
       const pfBlaze = document.getElementById('pf-blazehandle');
       if (pfBlaze && !pfBlaze.value && data.handle) pfBlaze.value = data.handle;
     } else {
-      if (badge) badge.style.display = 'none';
+      if (badge && userAddress) badge.innerHTML = `<span style="width:18px;height:18px;border-radius:50%;background:rgba(255,107,26,0.15);display:inline-flex;align-items:center;justify-content:center;font-size:0.65rem;">🔑</span> ${userAddress.slice(0,6)}…${userAddress.slice(-4)}`;
       if (btn) btn.style.display = 'inline-flex';
     }
   } catch (e) { console.warn('[checkBlazeStatus]', e.message); }
@@ -331,7 +381,6 @@ function updateBlazeUI() {
       ? `<img src="${escHtml(blazeProfile.avatarUrl)}" style="width:18px;height:18px;border-radius:50%;object-fit:cover;" onerror="this.style.display='none'"/>`
       : '<svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>'
     } ${escHtml(blazeProfile.username || 'Blaze')}`;
-    badge.style.display = 'inline-flex';
   }
   const blazeBtn = document.getElementById('btn-blaze');
   if (blazeBtn) blazeBtn.style.display = 'none';
@@ -372,7 +421,7 @@ async function disconnectBlaze() {
     blazeProfile = null;
     sessionStorage.removeItem('pending_blaze_user_id');
     const badge = document.getElementById('blaze-connected-badge');
-    if (badge) badge.style.display = 'none';
+    if (badge && userAddress) badge.innerHTML = `<span style="width:18px;height:18px;border-radius:50%;background:rgba(255,107,26,0.15);display:inline-flex;align-items:center;justify-content:center;font-size:0.65rem;">🔑</span> ${userAddress.slice(0,6)}…${userAddress.slice(-4)}`;
     const btn = document.getElementById('btn-blaze');
     if (btn) btn.style.display = 'inline-flex';
     const pfBlaze = document.getElementById('pf-blazehandle');
@@ -594,6 +643,7 @@ async function saveProfile() {
       updated_at: new Date().toISOString()
     }, { onConflict: 'wallet' });
     toast('Profile saved');
+    closeEditProfile();
     loadDashboard();
   } catch(e) { toast('Could not save profile: ' + e.message, 'error'); }
 }
@@ -969,6 +1019,111 @@ async function loadBountyMeta(bountyId) {
   }
 }
 
+// ==================== POST BOUNTY DRAFT AUTOSAVE ====================
+// Saves whatever's in the Post Bounty form to Supabase every ~60s while the
+// tab is open, so an accidental refresh/close never loses the user's work.
+function collectPostDraftFields() {
+  return {
+    reward: document.getElementById('pb-reward')?.value || '',
+    vod: document.getElementById('pb-vod')?.value || '',
+    description: document.getElementById('pb-description')?.value || '',
+    duration: document.getElementById('pb-duration')?.value || '',
+    mode: document.querySelector('input[name="pb-mode"]:checked')?.value || '0',
+    streamTitle: document.getElementById('pb-stream-title')?.value || '',
+    reqMode: typeof getReqMode === 'function' ? getReqMode() : 'freeform',
+    reqText: document.getElementById('pb-req-text')?.value || '',
+    reqItems: [...document.querySelectorAll('.pb-req-item-input')].map(i => i.value),
+    scheduleDay: document.getElementById('pb-schedule-day')?.value || '',
+    scheduleTime: document.getElementById('pb-schedule-time')?.value || '',
+    scheduleTz: document.getElementById('pb-schedule-tz')?.value || '',
+    numWinners: document.getElementById('pb-num-winners')?.value || '1'
+  };
+}
+
+function isPostDraftEmpty(d) {
+  return !d.reward && !d.vod && !d.description && !d.streamTitle && !d.reqText &&
+    (!d.reqItems || d.reqItems.every(x => !x)) && !d.scheduleDay && !d.scheduleTime && !d.scheduleTz;
+}
+
+function applyPostDraftFields(d) {
+  if (!d) return;
+  if (d.reward) document.getElementById('pb-reward').value = d.reward;
+  if (d.vod) document.getElementById('pb-vod').value = d.vod;
+  if (d.description) document.getElementById('pb-description').value = d.description;
+  if (d.duration) document.getElementById('pb-duration').value = d.duration;
+  if (d.mode) {
+    const radio = document.querySelector(`input[name="pb-mode"][value="${d.mode}"]`);
+    if (radio) {
+      radio.checked = true;
+      document.querySelectorAll('.pb-mode-card').forEach(c => c.classList.toggle('pb-mode-active', c.contains(radio)));
+    }
+  }
+  if (d.streamTitle) document.getElementById('pb-stream-title').value = d.streamTitle;
+  if (d.reqMode === 'list' && d.reqItems?.some(Boolean)) {
+    const btn = document.querySelector('.pb-req-toggle-btn[data-mode="list"]');
+    if (btn) setReqMode('list', btn);
+    document.getElementById('pb-req-items').innerHTML = '';
+    d.reqItems.filter(Boolean).forEach(v => addReqItem(v));
+  } else if (d.reqText) {
+    document.getElementById('pb-req-text').value = d.reqText;
+  }
+  if (d.scheduleDay) document.getElementById('pb-schedule-day').value = d.scheduleDay;
+  if (d.scheduleTime) document.getElementById('pb-schedule-time').value = d.scheduleTime;
+  if (d.scheduleTz) document.getElementById('pb-schedule-tz').value = d.scheduleTz;
+  if (d.numWinners) document.getElementById('pb-num-winners').value = d.numWinners;
+  if (typeof onPbRewardInput === 'function') onPbRewardInput();
+}
+
+let lastPostDraftSaved = null;
+async function savePostDraft(force) {
+  if (!userAddress) return;
+  const postTab = document.getElementById('tab-post');
+  if (!postTab || postTab.style.display === 'none') return;
+  const draft = collectPostDraftFields();
+  if (isPostDraftEmpty(draft)) return;
+  const json = JSON.stringify(draft);
+  if (!force && json === lastPostDraftSaved) return; // unchanged since last save — skip the write
+  try {
+    initSupabase();
+    await db.from('bounty_drafts').upsert(
+      { wallet: userAddress.toLowerCase(), draft, updated_at: new Date().toISOString() },
+      { onConflict: 'wallet' }
+    );
+    lastPostDraftSaved = json;
+    const status = document.getElementById('pb-draft-status');
+    if (status) status.textContent = '💾 Draft autosaved ' + new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  } catch (e) { /* draft saving should never interrupt the user */ }
+}
+
+let postDraftRestored = false;
+async function restorePostDraft() {
+  if (!userAddress || postDraftRestored) return;
+  postDraftRestored = true;
+  try {
+    initSupabase();
+    const { data } = await db.from('bounty_drafts').select('draft').eq('wallet', userAddress.toLowerCase()).maybeSingle();
+    if (data?.draft && isPostDraftEmpty(collectPostDraftFields())) {
+      applyPostDraftFields(data.draft);
+      lastPostDraftSaved = JSON.stringify(data.draft);
+      const status = document.getElementById('pb-draft-status');
+      if (status) status.textContent = '📝 Restored your saved draft';
+    }
+  } catch (e) {}
+}
+
+function clearPostDraft() {
+  lastPostDraftSaved = null;
+  const status = document.getElementById('pb-draft-status');
+  if (status) status.textContent = '';
+  if (!userAddress) return;
+  initSupabase();
+  db.from('bounty_drafts').delete().eq('wallet', userAddress.toLowerCase()).then(()=>{}).catch(()=>{});
+}
+
+setInterval(() => savePostDraft(false), 60000); // every 1 minute while the Post tab is open
+document.addEventListener('visibilitychange', () => { if (document.hidden) savePostDraft(true); });
+window.addEventListener('pagehide', () => savePostDraft(true));
+
 async function postBounty() {
   if (!userAddress) { toast('Connect wallet first', 'error'); return; }
   if (!escrow || !blaze) { toast('Wallet not ready — reconnect', 'error'); return; }
@@ -1050,6 +1205,7 @@ async function postBounty() {
     document.getElementById('pb-schedule-day').value = '';
     document.getElementById('pb-schedule-time').value = '';
     document.getElementById('pb-req-items').innerHTML = '';
+    clearPostDraft();
 
     loadBounties();
     setTimeout(() => showPage('bounties'), 1000);
@@ -1063,10 +1219,12 @@ async function postBounty() {
 // ==================== BOUNTY DETAIL ====================
 let currentBountyId = null;
 
-async function openBountyDetail(bountyId) {
+async function openBountyDetail(bountyId, opts) {
+  opts = opts || {};
   currentBountyId = bountyId;
   prevPage = document.querySelector('.page.active')?.id.replace('page-','') || 'bounties';
-  showPage('bounty-detail');
+  showPage('bounty-detail', { skipUrl: true });
+  if (!opts.skipUrl) history.pushState({ bountyId }, '', `/bounties/${bountyId}`);
   const el = document.getElementById('bd-content');
   el.innerHTML = `<div style="display:flex;flex-direction:column;gap:12px;padding:20px 0;">${[1,2,3].map(()=>'<div class="skeleton" style="height:60px;border-radius:10px;"></div>').join('')}</div>`;
 
@@ -1261,7 +1419,7 @@ function bountyMetaCardHTML(meta) {
 
 // ==================== SHARE ====================
 function shareBounty(bountyId) {
-  const url = `${window.location.origin}${window.location.pathname}?bounty=${bountyId}`;
+  const url = `${window.location.origin}/bounties/${bountyId}`;
   if (navigator.share) {
     navigator.share({ title: 'BlazeDAO Bounty', url }).catch(() => {});
   } else if (navigator.clipboard) {
@@ -1271,11 +1429,12 @@ function shareBounty(bountyId) {
   }
 }
 
-// Check the URL for ?bounty=ID on load and jump straight to that bounty
+// Legacy ?bounty=ID links (older shared links) still jump straight to that bounty.
+// New links use /bounties/:id and are handled by routeFromLocation() instead.
 function handleSharedBountyLink() {
   const params = new URLSearchParams(window.location.search);
   const id = params.get('bounty');
-  if (id !== null && /^\d+$/.test(id)) openBountyDetail(parseInt(id));
+  if (id !== null && /^\d+$/.test(id)) { openBountyDetail(parseInt(id)); }
 }
 
 // ==================== COMMENTS ====================
@@ -1326,6 +1485,36 @@ async function postComment(bountyId) {
 function toggleFlagBox(cardId) {
   const box = document.getElementById(`flag-box-${cardId}`);
   if (box) box.style.display = box.style.display === 'none' ? 'block' : 'none';
+}
+
+// ==================== SUPPORT TICKETS ====================
+async function submitSupportTicket() {
+  const subject = document.getElementById('sup-subject')?.value.trim();
+  const category = document.getElementById('sup-category')?.value || 'other';
+  const message = document.getElementById('sup-message')?.value.trim();
+
+  if (!subject) { toast('Add a subject', 'error'); return; }
+  if (!message || message.length < 5) { toast('Add a bit more detail in your message', 'error'); return; }
+
+  try {
+    initSupabase();
+    setTxStatus('sup-status', '⏳ Submitting…', 'info');
+    const { error } = await db.from('support_tickets').insert({
+      wallet: userAddress ? userAddress.toLowerCase() : null,
+      subject,
+      category,
+      message,
+      status: 'open'
+    });
+    if (error) throw error;
+    setTxStatus('sup-status', '✅ Ticket submitted — thanks for the report!', 'success');
+    toast('🛟 Support ticket submitted');
+    document.getElementById('sup-subject').value = '';
+    document.getElementById('sup-message').value = '';
+  } catch (e) {
+    setTxStatus('sup-status', '❌ Could not submit ticket — try again shortly.', 'error');
+    toast('Could not submit ticket', 'error');
+  }
 }
 
 async function submitFlag(bountyId, subIndex, cardId) {
@@ -1770,7 +1959,10 @@ async function loadDashboard() {
           ${isLive ? `<span class="live-overlay-badge">LIVE</span>` : ''}
         </div>
         <div style="flex:1;min-width:180px;">
-          <div class="profile-name">${escHtml(name)}</div>
+          <div style="display:flex;align-items:center;flex-wrap:wrap;">
+            <div class="profile-name">${escHtml(name)}</div>
+            <button class="pf-edit-btn" onclick="switchTab('tab-profile',document.getElementById('nav-profile'));openEditProfile();" title="Edit profile">✏️ Edit</button>
+          </div>
           ${handle ? `<div class="profile-blaze-handle">🔥 @${escHtml(handle)} on Blaze</div>` : ''}
           <div class="profile-stats-row">
             <span class="profile-role-badge">${escHtml(role)}</span>
@@ -1779,6 +1971,7 @@ async function loadDashboard() {
             ${isLive ? `<span class="profile-stat live-stat">● LIVE · ${viewers} viewers</span>` : ''}
           </div>
           ${isLive && liveTitle ? `<div style="font-size:0.75rem;color:var(--muted);margin-top:4px;">🎮 ${escHtml(liveTitle)}</div>` : ''}
+          ${userAddress ? `<div class="profile-wallet-chip" onclick="copyWalletAddress()" title="Click to copy full address">🔑 ${userAddress.slice(0,6)}…${userAddress.slice(-4)} · Copy</div>` : ''}
         </div>
       </div>`;
   }
@@ -1865,6 +2058,23 @@ function loadProfileTab() {
     pfCard.style.display = 'block';
     pfCard.innerHTML = summaryEl.innerHTML;
   }
+}
+
+// ==================== EDIT PROFILE MODAL ====================
+function openEditProfile() {
+  if (!userAddress) { toast('Connect your wallet first', 'error'); return; }
+  document.getElementById('edit-profile-modal')?.classList.add('active');
+}
+function closeEditProfile() {
+  document.getElementById('edit-profile-modal')?.classList.remove('active');
+}
+document.addEventListener('click', e => {
+  if (e.target.id === 'edit-profile-modal') closeEditProfile();
+});
+
+function copyWalletAddress() {
+  if (!userAddress) return;
+  navigator.clipboard?.writeText(userAddress).then(() => toast('Wallet address copied')).catch(() => toast('Could not copy address', 'error'));
 }
 
 // ==================== ACTIVITY FEED (platform-wide, tab-submissions) ====================
@@ -2099,31 +2309,62 @@ function filterMySubmissions(filter, btn) {
   renderMySubmissions();
 }
 
-// ==================== NAVIGATION ====================
-function showPage(page) {
+// ==================== NAVIGATION / ROUTING ====================
+// Every page (and dashboard tab) gets a real URL so refreshing keeps you there.
+const PAGE_PATH = { 'home':'/', 'bounties':'/bounties', 'docs':'/docs', 'how-to-earn':'/how-to-earn', 'support':'/support', 'dashboard':'/dashboard' };
+const TAB_PATH = { 'tab-overview':'/dashboard', 'tab-bounties-dash':'/dashboard/bounties', 'tab-post':'/dashboard/post', 'tab-submissions':'/dashboard/activity', 'tab-profile':'/dashboard/profile' };
+const TAB_FROM_PATH = { '/dashboard':'tab-overview', '/dashboard/bounties':'tab-bounties-dash', '/dashboard/post':'tab-post', '/dashboard/activity':'tab-submissions', '/dashboard/profile':'tab-profile' };
+const NAV_ID_FOR_TAB = { 'tab-overview':'nav-overview','tab-bounties-dash':'nav-bounties-dash','tab-submissions':'nav-submissions','tab-post':'nav-post','tab-profile':'nav-profile' };
+
+function showPage(page, opts) {
+  opts = opts || {};
   document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
   const target = document.getElementById('page-' + page);
   if (target) target.classList.add('active');
   window.scrollTo(0,0);
   if (page === 'dashboard') loadDashboard();
   if (page === 'bounties') loadBounties();
+  if (!opts.skipUrl) {
+    const path = PAGE_PATH[page] || '/';
+    history.pushState({ page }, '', path);
+  }
 }
 
-function switchTab(tabId, clickedEl) {
+function switchTab(tabId, clickedEl, opts) {
+  opts = opts || {};
   document.querySelectorAll('.tab-content').forEach(t => t.style.display = 'none');
   document.querySelectorAll('.dash-tab').forEach(t => t.classList.remove('active'));
   const el = document.getElementById(tabId);
   if (el) el.style.display = 'block';
   if (clickedEl) clickedEl.classList.add('active');
-  else {
-    const navMap = { 'tab-overview':'nav-overview','tab-bounties-dash':'nav-bounties-dash','tab-submissions':'nav-submissions','tab-post':'nav-post','tab-profile':'nav-profile' };
-    document.getElementById(navMap[tabId])?.classList.add('active');
-  }
+  else document.getElementById(NAV_ID_FOR_TAB[tabId])?.classList.add('active');
   if (tabId === 'tab-bounties-dash') loadBounties();
   if (tabId === 'tab-submissions') loadActivityFeed();
   if (tabId === 'tab-profile') { loadProfileTab(); loadMyStats(); loadMyBountiesList(); loadMySubmissionsList(); }
-  if (tabId === 'tab-post') { loadPbXHandle(); loadPbBalance(); }
+  if (tabId === 'tab-post') { loadPbXHandle(); loadPbBalance(); restorePostDraft(); }
+  if (!opts.skipUrl) history.pushState({ tabId }, '', TAB_PATH[tabId] || '/dashboard');
 }
+
+// Reads the current URL and shows whatever page/tab it points to — used on
+// first load and whenever the user hits back/forward.
+function routeFromLocation() {
+  const path = (window.location.pathname || '/').replace(/\/+$/, '') || '/';
+
+  const bMatch = path.match(/^\/bounties\/(\d+)$/);
+  if (bMatch) { openBountyDetail(parseInt(bMatch[1]), { skipUrl: true }); return; }
+
+  if (path === '/dashboard' || path.startsWith('/dashboard/')) {
+    if (!userAddress) { showPage('home', { skipUrl: true }); history.replaceState({}, '', '/'); return; }
+    showPage('dashboard', { skipUrl: true });
+    const tabId = TAB_FROM_PATH[path] || 'tab-overview';
+    switchTab(tabId, document.getElementById(NAV_ID_FOR_TAB[tabId]), { skipUrl: true });
+    return;
+  }
+
+  const pageMap = { '/': 'home', '/bounties': 'bounties', '/docs': 'docs', '/how-to-earn': 'how-to-earn', '/support': 'support' };
+  showPage(pageMap[path] || 'home', { skipUrl: true });
+}
+window.addEventListener('popstate', () => routeFromLocation());
 
 function setMobileActive(btnId) {
   document.querySelectorAll('.mobile-nav-btn').forEach(b => b.classList.remove('active'));
@@ -2144,12 +2385,13 @@ const exposed = { connectWallet, disconnectWallet, showPage, switchTab, postBoun
   onPbSliderInput, onPbRewardInput, setPbRewardPct, connectX, disconnectX };
 Object.assign(window, exposed);
 
-document.addEventListener('DOMContentLoaded', () => {
+document.addEventListener('DOMContentLoaded', async () => {
   initSupabase();
   loadBounties();
   loadPlatformStats();
-  if (window.ethereum?.selectedAddress) connectWallet();
+  await connectWallet({ silent: true }); // reconnect without a fresh prompt if already authorized
   handleOAuthCallbacks();
+  routeFromLocation();
   handleSharedBountyLink();
 
   // Mode card radio toggle — highlight selected card
@@ -2199,17 +2441,64 @@ nav { position: fixed; top: 0; left: 0; right: 0; z-index: 100; background: rgba
 .btn-orange:hover { opacity: 0.88; }
 .nav-dash-btn { letter-spacing: 0.02em; }
 @media (max-width: 640px) {
-  .nav-desktop-only { display: none !important; }
   nav { padding: 0 8px; gap: 4px; height: 48px; }
-  .nav-addr { display: none !important; }
-  .dash-text { display: none !important; }
-  #btn-dashboard { min-width: 36px !important; padding: 0 8px !important; font-size: 0.95rem !important; height: 32px !important; border-radius: 7px !important; }
   #btn-connect { height: 32px !important; padding: 0 10px !important; font-size: 0.72rem !important; border-radius: 7px !important; }
+  .nav-logo-sm svg { width: 74px; height: 20px; }
 }
 .nav-logo { font-family: var(--font-display); font-size: 1.7rem; letter-spacing: 3px; cursor: pointer; flex-shrink: 0; }
 .nav-logo span { color: var(--red); }
+.nav-logo-sm { display: flex; align-items: center; }
+.nav-left { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
 .nav-right { display: flex; align-items: center; gap: 8px; flex-shrink: 0; min-width: 0; }
 .nav-addr { font-family: var(--font-mono); font-size: 0.72rem; color: var(--orange); background: rgba(255,107,26,0.1); padding: 4px 8px; border-radius: 4px; border: 1px solid rgba(255,107,26,0.3); white-space: nowrap; }
+
+/* HAMBURGER */
+.hamburger-btn { width: 34px; height: 34px; border-radius: 7px; border: 1px solid var(--border); background: transparent; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; cursor: pointer; flex-shrink: 0; transition: border-color 0.15s, background 0.15s; }
+.hamburger-btn:hover { border-color: var(--red); background: rgba(232,53,10,0.08); }
+.hamburger-btn span { display: block; width: 16px; height: 2px; background: var(--text); border-radius: 2px; transition: transform 0.25s ease, opacity 0.2s ease; }
+.hamburger-btn.open span:nth-child(1) { transform: translateY(6px) rotate(45deg); }
+.hamburger-btn.open span:nth-child(2) { opacity: 0; }
+.hamburger-btn.open span:nth-child(3) { transform: translateY(-6px) rotate(-45deg); }
+
+/* SIDE DRAWER */
+.drawer-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.7); z-index: 300; opacity: 0; pointer-events: none; transition: opacity 0.25s ease; }
+.drawer-overlay.open { opacity: 1; pointer-events: auto; }
+.side-drawer { position: fixed; top: 0; left: 0; bottom: 0; width: 280px; max-width: 84vw; background: var(--dark); border-right: 1px solid var(--border); z-index: 301; transform: translateX(-100%); transition: transform 0.28s cubic-bezier(.32,.72,0,1); display: flex; flex-direction: column; padding: 20px 16px; overflow-y: auto; }
+.side-drawer.open { transform: translateX(0); }
+.drawer-close { position: absolute; top: 14px; right: 14px; width: 30px; height: 30px; border-radius: 50%; border: none; background: rgba(255,255,255,0.06); color: var(--muted); cursor: pointer; font-size: 0.95rem; }
+.drawer-close:hover { color: var(--red); background: rgba(232,53,10,0.1); }
+.drawer-top { display: flex; align-items: center; gap: 10px; padding: 6px 4px 18px; border-bottom: 1px solid var(--border); margin-bottom: 14px; flex-wrap: wrap; }
+.drawer-testnet-tag { font-family: var(--font-mono); font-size: 0.62rem; font-weight: 700; letter-spacing: 0.08em; color: var(--amber); background: rgba(255,149,0,0.12); border: 1px solid rgba(255,149,0,0.35); padding: 3px 7px; border-radius: 5px; }
+.drawer-section-label { font-size: 0.66rem; text-transform: uppercase; letter-spacing: 0.1em; color: var(--muted); margin: 14px 6px 6px; }
+.drawer-links { display: flex; flex-direction: column; gap: 2px; }
+.drawer-links button { display: flex; align-items: center; gap: 10px; text-align: left; background: transparent; border: none; color: var(--text); font-family: var(--font-body); font-weight: 600; font-size: 0.9rem; padding: 11px 10px; border-radius: 8px; cursor: pointer; transition: background 0.15s, color 0.15s; }
+.drawer-links button:hover { background: rgba(232,53,10,0.1); color: var(--orange); }
+
+/* ACCOUNT MENU (blaze/profile dropdown) */
+.account-menu { position: relative; }
+.account-menu-trigger { display: flex; align-items: center; gap: 6px; background: rgba(255,107,26,0.08); border: 1px solid rgba(255,107,26,0.25); border-radius: 20px; padding: 3px 8px 3px 3px; cursor: pointer; color: var(--text); }
+.account-dropdown { position: absolute; top: calc(100% + 8px); right: 0; background: var(--card); border: 1px solid var(--border); border-radius: 10px; min-width: 170px; padding: 6px; display: none; flex-direction: column; gap: 2px; box-shadow: 0 12px 28px rgba(0,0,0,0.5); z-index: 150; }
+.account-dropdown.open { display: flex; }
+.account-dropdown button { text-align: left; background: transparent; border: none; color: var(--text); font-family: var(--font-body); font-weight: 600; font-size: 0.82rem; padding: 9px 10px; border-radius: 6px; cursor: pointer; }
+.account-dropdown button:hover { background: rgba(232,53,10,0.1); color: var(--orange); }
+.account-dropdown-danger:hover { color: var(--red) !important; background: rgba(232,53,10,0.12) !important; }
+.account-dropdown-divider { height: 1px; background: var(--border); margin: 4px 2px; }
+
+/* COMING SOON badge + generic info tips */
+.coming-soon-badge { font-size: 0.62rem; font-weight: 800; text-transform: uppercase; letter-spacing: 0.06em; color: var(--amber); background: rgba(255,149,0,0.12); border: 1px solid rgba(255,149,0,0.35); padding: 4px 8px; border-radius: 20px; white-space: nowrap; }
+.info-tip { display: flex; align-items: flex-start; gap: 10px; background: rgba(255,107,26,0.06); border: 1px solid rgba(255,107,26,0.2); border-radius: 10px; padding: 12px 14px; font-size: 0.8rem; color: var(--muted); line-height: 1.5; margin-bottom: 16px; }
+.info-tip b, .info-tip strong { color: var(--text); }
+.info-tip .info-tip-icon { flex-shrink: 0; font-size: 1rem; }
+.profile-wallet-chip { display: inline-flex; align-items: center; gap: 6px; font-family: var(--font-mono); font-size: 0.72rem; color: var(--orange); background: rgba(255,107,26,0.1); padding: 5px 10px; border-radius: 20px; border: 1px solid rgba(255,107,26,0.3); cursor: pointer; margin-top: 8px; }
+.profile-wallet-chip:hover { border-color: var(--orange); }
+.pf-edit-btn { background: transparent; border: 1px solid var(--border); color: var(--muted); font-size: 0.68rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; padding: 5px 10px; border-radius: 20px; cursor: pointer; display: inline-flex; align-items: center; gap: 5px; margin-left: 8px; }
+.pf-edit-btn:hover { border-color: var(--orange); color: var(--orange); }
+
+.quick-actions { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin: 16px 0; }
+.quick-action-btn { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 16px 8px; cursor: pointer; color: var(--text); font-family: var(--font-body); font-weight: 700; font-size: 0.74rem; text-align: center; transition: border-color 0.15s, transform 0.15s; }
+.quick-action-btn:hover { border-color: var(--orange); transform: translateY(-2px); }
+.quick-action-btn .qa-icon { font-size: 1.4rem; }
+@media (max-width: 640px) { .quick-actions { grid-template-columns: repeat(2, 1fr); } }
 
 /* BUTTONS */
 .btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; padding: 9px 18px; border: none; border-radius: 5px; font-family: var(--font-body); font-weight: 700; font-size: 0.82rem; letter-spacing: 0.4px; cursor: pointer; transition: all 0.15s; text-transform: uppercase; white-space: nowrap; }
@@ -2435,7 +2724,6 @@ textarea { resize: vertical; min-height: 76px; }
   nav { padding: 0 12px; height: 54px; gap: 6px; }
   .nav-logo { font-size: 1.4rem; letter-spacing: 2px; }
   .nav-right { gap: 5px; }
-  .nav-addr { font-size: 0.64rem; padding: 3px 6px; max-width: 80px; overflow: hidden; text-overflow: ellipsis; }
   .page { padding-top: 54px; }
   #mobile-bottom-nav { display: flex; }
   .dashboard-grid { grid-template-columns: 1fr; padding-bottom: 72px; }
@@ -2466,8 +2754,6 @@ textarea { resize: vertical; min-height: 76px; }
 @media (max-width: 480px) {
   .nav-logo { font-size: 1.2rem; }
   .btn-sm { padding: 5px 9px; font-size: 0.7rem; }
-  .nav-addr { display: none; }
-  #btn-dashboard .dash-text { display: none; }
   .hero h1 { font-size: 2.4rem; }
   .bounty-reward { font-size: 1.2rem; }
 }
@@ -2571,39 +2857,83 @@ textarea { resize: vertical; min-height: 76px; }
 #clapper-arm { animation: clapperClap 1.1s ease-in-out 1 forwards; }
 </style>
 <nav>
-  <div class="nav-logo" onclick="showPage('home')">
-    <svg width="110" height="30" viewBox="0 0 110 30" fill="none" xmlns="http://www.w3.org/2000/svg">
-      <defs><linearGradient id="lg" x1="0" y1="0" x2="100%" y2="0"><stop offset="0%" stop-color="#E8350A"/><stop offset="100%" stop-color="#FF9500"/></linearGradient></defs>
-      <rect x="1" y="6" width="18" height="17" rx="2" fill="url(#lg)" opacity="0.9"/>
-      <rect x="1" y="6" width="18" height="5" rx="1" fill="#0A0A0A" opacity="0.4"/>
-      <line x1="5" y1="6" x2="3" y2="11" stroke="#0A0A0A" stroke-width="1.5" opacity="0.6"/>
-      <line x1="9" y1="6" x2="7" y2="11" stroke="#0A0A0A" stroke-width="1.5" opacity="0.6"/>
-      <line x1="13" y1="6" x2="11" y2="11" stroke="#0A0A0A" stroke-width="1.5" opacity="0.6"/>
-      <polygon points="7,15 7,21 14,18" fill="white" opacity="0.9"/>
-      <text x="23" y="21" font-family="'Bebas Neue',sans-serif" font-size="19" letter-spacing="1.5" fill="url(#lg)">CLIP</text>
-      <text x="66" y="21" font-family="'Bebas Neue',sans-serif" font-size="19" letter-spacing="1.5" fill="#F0F0F0">DAO</text>
-      <line x1="23" y1="24" x2="109" y2="24" stroke="url(#lg)" stroke-width="1" opacity="0.5"/>
-    </svg>
+  <div class="nav-left">
+    <button class="hamburger-btn" id="hamburger-btn" onclick="toggleDrawer()" aria-label="Menu" title="Menu">
+      <span></span><span></span><span></span>
+    </button>
+    <div class="nav-logo nav-logo-sm" onclick="showPage('home')">
+      <svg width="88" height="24" viewBox="0 0 110 30" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <defs><linearGradient id="lg2" x1="0" y1="0" x2="100%" y2="0"><stop offset="0%" stop-color="#E8350A"/><stop offset="100%" stop-color="#FF9500"/></linearGradient></defs>
+        <rect x="1" y="6" width="18" height="17" rx="2" fill="url(#lg2)" opacity="0.9"/>
+        <rect x="1" y="6" width="18" height="5" rx="1" fill="#0A0A0A" opacity="0.4"/>
+        <line x1="5" y1="6" x2="3" y2="11" stroke="#0A0A0A" stroke-width="1.5" opacity="0.6"/>
+        <line x1="9" y1="6" x2="7" y2="11" stroke="#0A0A0A" stroke-width="1.5" opacity="0.6"/>
+        <line x1="13" y1="6" x2="11" y2="11" stroke="#0A0A0A" stroke-width="1.5" opacity="0.6"/>
+        <polygon points="7,15 7,21 14,18" fill="white" opacity="0.9"/>
+        <text x="23" y="21" font-family="'Bebas Neue',sans-serif" font-size="19" letter-spacing="1.5" fill="url(#lg2)">CLIP</text>
+        <text x="66" y="21" font-family="'Bebas Neue',sans-serif" font-size="19" letter-spacing="1.5" fill="#F0F0F0">DAO</text>
+        <line x1="23" y1="24" x2="109" y2="24" stroke="url(#lg2)" stroke-width="1" opacity="0.5"/>
+      </svg>
+    </div>
   </div>
   <div class="nav-right">
-    <button class="btn btn-ghost btn-sm nav-desktop-only" onclick="showPage('bounties')" style="font-size:0.7rem;">Bounties</button>
-    <button class="btn btn-ghost btn-sm nav-desktop-only" onclick="showPage('docs')" style="font-size:0.7rem;">Docs</button>
-    <span id="nav-addr" class="nav-addr" style="display:none"></span>
-    <span id="blaze-connected-badge" class="blaze-nav-badge" style="display:none"></span>
     <button id="btn-blaze" class="btn btn-blaze-connect btn-sm" style="display:none" onclick="connectBlaze()">
       <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
       Connect Blaze
     </button>
     <button id="btn-connect" class="btn btn-primary btn-sm" onclick="connectWallet()">Connect Wallet</button>
-    <button id="btn-dashboard" class="btn btn-dashboard-nav btn-sm" style="display:none" onclick="showPage('dashboard')">
-      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
-      <span class="dash-text">Dashboard</span>
-    </button>
-    <button id="btn-disconnect" class="btn btn-ghost btn-sm" style="display:none" onclick="disconnectWallet()" title="Disconnect">
-      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
-    </button>
+    <div class="account-menu" id="account-menu" style="display:none;">
+      <button class="account-menu-trigger" id="account-menu-trigger" onclick="toggleAccountMenu(event)">
+        <span id="blaze-connected-badge" class="blaze-nav-badge"></span>
+        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" style="opacity:0.6;"><polyline points="6 9 12 15 18 9"/></svg>
+      </button>
+      <div class="account-dropdown" id="account-dropdown">
+        <button onclick="closeAccountMenu();showPage('dashboard');switchTab('tab-profile',document.getElementById('nav-profile'));">👤 Profile</button>
+        <button onclick="closeAccountMenu();showPage('dashboard');">⚡ Dashboard</button>
+        <div class="account-dropdown-divider"></div>
+        <button class="account-dropdown-danger" onclick="closeAccountMenu();disconnectWallet();">🚪 Logout</button>
+      </div>
+    </div>
   </div>
 </nav>
+
+<!-- ==================== SIDE DRAWER NAV ==================== -->
+<div class="drawer-overlay" id="drawer-overlay" onclick="closeDrawer()"></div>
+<div class="side-drawer" id="side-drawer">
+  <button class="drawer-close" onclick="closeDrawer()" aria-label="Close menu">✕</button>
+  <div class="drawer-top">
+    <svg width="120" height="32" viewBox="0 0 110 30" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <defs><linearGradient id="lg3" x1="0" y1="0" x2="100%" y2="0"><stop offset="0%" stop-color="#E8350A"/><stop offset="100%" stop-color="#FF9500"/></linearGradient></defs>
+      <rect x="1" y="6" width="18" height="17" rx="2" fill="url(#lg3)" opacity="0.9"/>
+      <rect x="1" y="6" width="18" height="5" rx="1" fill="#0A0A0A" opacity="0.4"/>
+      <line x1="5" y1="6" x2="3" y2="11" stroke="#0A0A0A" stroke-width="1.5" opacity="0.6"/>
+      <line x1="9" y1="6" x2="7" y2="11" stroke="#0A0A0A" stroke-width="1.5" opacity="0.6"/>
+      <line x1="13" y1="6" x2="11" y2="11" stroke="#0A0A0A" stroke-width="1.5" opacity="0.6"/>
+      <polygon points="7,15 7,21 14,18" fill="white" opacity="0.9"/>
+      <text x="23" y="21" font-family="'Bebas Neue',sans-serif" font-size="19" letter-spacing="1.5" fill="url(#lg3)">CLIP</text>
+      <text x="66" y="21" font-family="'Bebas Neue',sans-serif" font-size="19" letter-spacing="1.5" fill="#F0F0F0">DAO</text>
+      <line x1="23" y1="24" x2="109" y2="24" stroke="url(#lg3)" stroke-width="1" opacity="0.5"/>
+    </svg>
+    <span class="drawer-testnet-tag">TESTNET</span>
+  </div>
+  <div class="drawer-links">
+    <div class="drawer-section-label">Explore</div>
+    <button onclick="drawerGo('home')">🏠 Home</button>
+    <button onclick="drawerGo('bounties')">🎯 Bounties</button>
+    <button onclick="drawerGo('how-to-earn')">💰 How to Earn</button>
+    <button onclick="drawerGo('docs')">📄 Docs</button>
+
+    <div class="drawer-section-label" id="drawer-dash-label" style="display:none;">Dashboard</div>
+    <button id="drawer-overview" style="display:none;" onclick="drawerGoTab('tab-overview','nav-overview')">⚡ Overview</button>
+    <button id="drawer-bounties-dash" style="display:none;" onclick="drawerGoTab('tab-bounties-dash','nav-bounties-dash')">🎯 Bounty Board</button>
+    <button id="drawer-post" style="display:none;" onclick="drawerGoTab('tab-post','nav-post')">➕ Post a Bounty</button>
+    <button id="drawer-submissions" style="display:none;" onclick="drawerGoTab('tab-submissions','nav-submissions')">⚡ Activity</button>
+    <button id="drawer-profile" style="display:none;" onclick="drawerGoTab('tab-profile','nav-profile')">👤 My Profile</button>
+
+    <div class="drawer-section-label">Help</div>
+    <button onclick="drawerGo('support')">🛟 Support</button>
+  </div>
+</div>
 
 <!-- ==================== PAGE: HOME ==================== -->
 <div id="page-home" class="page active">
@@ -2666,6 +2996,7 @@ textarea { resize: vertical; min-height: 76px; }
         <img src="https://raw.githubusercontent.com/precidoboss/my-game-sprites/main/24333f4f-66da-4d04-a37e-e03d4c992228-removebg-preview.png" class="pg-banner-mascot" onerror="this.style.display='none'" alt=""/>
       </div>
     </div>
+    <div class="info-tip"><span class="info-tip-icon">ℹ️</span><div>Browse open bounties below, click one to see the full brief, then submit your clip's X link once you've posted it. New to clipping? Check out the <a href="#" onclick="event.preventDefault();showPage('how-to-earn');" style="color:var(--orange);">How to Earn</a> guide first.</div></div>
     <div style="display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap;">
       <button class="btn btn-ghost btn-sm bounty-filter-btn active" onclick="filterBounties('all', this)">All</button>
       <button class="btn btn-ghost btn-sm bounty-filter-btn" onclick="filterBounties('open', this)">Open</button>
@@ -2710,6 +3041,28 @@ textarea { resize: vertical; min-height: 76px; }
       </div>
       <div id="dash-profile-summary" class="dash-profile-card">
         <p style="color:var(--muted);">Loading…</p>
+      </div>
+
+      <!-- Quick Actions -->
+      <div class="quick-actions">
+        <button class="quick-action-btn" onclick="switchTab('tab-post',document.getElementById('nav-post'))">
+          <span class="qa-icon">➕</span><span>Post a Bounty</span>
+        </button>
+        <button class="quick-action-btn" onclick="switchTab('tab-bounties-dash',document.getElementById('nav-bounties-dash'))">
+          <span class="qa-icon">🎯</span><span>Browse Bounties</span>
+        </button>
+        <button class="quick-action-btn" onclick="claimFaucet()">
+          <span class="qa-icon">🚰</span><span>Claim Testnet $BLAZE</span>
+        </button>
+        <button class="quick-action-btn" onclick="switchTab('tab-submissions',document.getElementById('nav-submissions'))">
+          <span class="qa-icon">⚡</span><span>My Activity</span>
+        </button>
+        <button class="quick-action-btn" onclick="switchTab('tab-profile',document.getElementById('nav-profile'));openEditProfile();">
+          <span class="qa-icon">✏️</span><span>Edit Profile</span>
+        </button>
+        <button class="quick-action-btn" onclick="showPage('how-to-earn')">
+          <span class="qa-icon">💰</span><span>How to Earn</span>
+        </button>
       </div>
 
       <!-- Stats row -->
@@ -2794,6 +3147,7 @@ textarea { resize: vertical; min-height: 76px; }
         <h2 style="font-family:var(--font-display);font-size:1.4rem;">Bounty Board</h2>
         <button class="btn btn-primary btn-sm" onclick="switchTab('tab-post',document.getElementById('nav-post'))">➕ Post a Bounty</button>
       </div>
+      <div class="info-tip"><span class="info-tip-icon">ℹ️</span><div>Every bounty here is fully funded and locked in escrow already — if you win, payout is guaranteed by the contract, not a promise.</div></div>
       <div id="bounty-list-dash-placeholder"></div>
     </div>
 
@@ -2808,6 +3162,7 @@ textarea { resize: vertical; min-height: 76px; }
           <img src="https://raw.githubusercontent.com/precidoboss/my-game-sprites/main/24333f4f-66da-4d04-a37e-e03d4c992228-removebg-preview.png" class="pg-banner-mascot" onerror="this.style.display='none'" alt=""/>
         </div>
       </div>
+      <div class="info-tip"><span class="info-tip-icon">ℹ️</span><div>This is a live feed of platform-wide activity, not just yours. Use the filters below to zero in on bounties, submissions, votes, or wins.</div></div>
       <div class="activity-filters" id="activity-filters">
         <button class="activity-filter-btn active" onclick="filterActivity('all', this)">All</button>
         <button class="activity-filter-btn" onclick="filterActivity('bounty_posted', this)">🎯 Bounties</button>
@@ -2836,6 +3191,9 @@ textarea { resize: vertical; min-height: 76px; }
           <img src="https://raw.githubusercontent.com/precidoboss/my-game-sprites/main/24333f4f-66da-4d04-a37e-e03d4c992228-removebg-preview.png" class="pg-banner-mascot" onerror="this.style.display='none'" alt=""/>
         </div>
       </div>
+
+      <div class="info-tip"><span class="info-tip-icon">ℹ️</span><div>Fill in the reward, describe exactly what you want clipped, and set a submission window — that's the minimum. Everything below is optional but helps clippers submit better clips. Your progress <b>autosaves as a draft</b> every minute, so it's safe to come back later.</div></div>
+      <div id="pb-draft-status" style="font-size:0.7rem;color:var(--muted);margin:-8px 0 14px;"></div>
 
       <div class="pb-section">
         <div class="pb-section-label"><span class="pb-step">1</span> Reward Amount</div>
@@ -3005,6 +3363,9 @@ textarea { resize: vertical; min-height: 76px; }
     <!-- PROFILE -->
     <div id="tab-profile" class="tab-content" style="display:none;">
       <div class="page-header"><h2>My Profile</h2><p>Your identity — linked from Blaze and stored off-chain.</p></div>
+
+      <div class="info-tip"><span class="info-tip-icon">ℹ️</span><div>This is your public identity on BlazeDAO. Tap <b>Edit</b> to update your display name, link your Blaze account, or set whether you're a clipper or streamer. Your wallet address below is how the platform recognises you on-chain.</div></div>
+
       <div id="pf-blaze-card" class="dash-profile-card" style="margin-bottom:16px;display:none;"></div>
 
       <div class="pf-stats-section">
@@ -3033,49 +3394,57 @@ textarea { resize: vertical; min-height: 76px; }
         </div>
         <div id="pf-submissions-list"><p style="color:var(--muted);font-size:0.8rem;">Connect your wallet to see your submissions.</p></div>
       </div>
-
-      <div class="form-group">
-        <label>Display username</label>
-        <input type="text" id="pf-username" placeholder="yourname"/>
-      </div>
-      <div class="form-group">
-        <label>X (Twitter) handle <span id="pf-x-verified-badge" style="display:none;font-size:0.72rem;color:var(--orange);">✓ Verified</span></label>
-        <input type="text" id="pf-xhandle" placeholder="yourhandle"/>
-      </div>
-      <div class="form-group" id="pf-x-actions">
-        <label>X Account Verification</label>
-        <div style="display:flex;gap:8px;flex-wrap:wrap;">
-          <button class="btn btn-blaze-connect btn-sm" id="pf-x-connect-btn" onclick="connectX()">
-            𝕏 Connect X Account
-          </button>
-          <button class="btn btn-ghost btn-sm" id="pf-x-disconnect-btn" style="display:none;border-color:var(--red);color:var(--red);" onclick="disconnectX()">Disconnect X</button>
-        </div>
-        <p class="pb-hint">Connecting verifies you actually own this X account — bounty tags and your profile badge only show once verified.</p>
-      </div>
-      <div class="form-group">
-        <label>Blaze handle <span style="font-size:0.72rem;color:var(--orange);">— auto-filled after connecting Blaze</span></label>
-        <input type="text" id="pf-blazehandle" placeholder="auto-filled from Blaze account" readonly/>
-      </div>
-      <div class="form-group" id="pf-blaze-actions">
-        <label>Blaze Account</label>
-        <div style="display:flex;gap:8px;flex-wrap:wrap;">
-          <button class="btn btn-blaze-connect btn-sm" onclick="connectBlaze()">
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
-            Connect / Reconnect Blaze
-          </button>
-          <button class="btn btn-ghost btn-sm" style="border-color:var(--red);color:var(--red);" onclick="disconnectBlaze()">Disconnect Blaze</button>
-        </div>
-      </div>
-      <div class="form-group">
-        <label>I am a...</label>
-        <div style="display:flex;gap:16px;">
-          <label style="display:flex;align-items:center;gap:6px;font-size:0.85rem;"><input type="radio" name="pf-role" value="clipper" checked/> Clipper</label>
-          <label style="display:flex;align-items:center;gap:6px;font-size:0.85rem;"><input type="radio" name="pf-role" value="streamer"/> Streamer</label>
-        </div>
-      </div>
-      <button class="btn btn-primary" style="width:100%;" onclick="saveProfile()">💾 Save Profile</button>
     </div>
 
+  </div>
+</div>
+
+<!-- ==================== EDIT PROFILE MODAL ==================== -->
+<div class="modal-overlay" id="edit-profile-modal">
+  <div class="modal">
+    <button class="modal-close" onclick="closeEditProfile()">✕</button>
+    <h2>✏️ Edit Profile</h2>
+
+    <div class="form-group">
+      <label>Display username</label>
+      <input type="text" id="pf-username" placeholder="yourname"/>
+    </div>
+    <div class="form-group">
+      <label>X (Twitter) handle <span id="pf-x-verified-badge" style="display:none;font-size:0.72rem;color:var(--orange);">✓ Verified</span></label>
+      <input type="text" id="pf-xhandle" placeholder="yourhandle"/>
+    </div>
+    <div class="form-group" id="pf-x-actions">
+      <label>X Account Verification</label>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+        <button class="btn btn-blaze-connect btn-sm" id="pf-x-connect-btn" onclick="connectX()">
+          𝕏 Connect X Account
+        </button>
+        <button class="btn btn-ghost btn-sm" id="pf-x-disconnect-btn" style="display:none;border-color:var(--red);color:var(--red);" onclick="disconnectX()">Disconnect X</button>
+      </div>
+      <p class="pb-hint">Connecting verifies you actually own this X account — bounty tags and your profile badge only show once verified.</p>
+    </div>
+    <div class="form-group">
+      <label>Blaze handle <span style="font-size:0.72rem;color:var(--orange);">— auto-filled after connecting Blaze</span></label>
+      <input type="text" id="pf-blazehandle" placeholder="auto-filled from Blaze account" readonly/>
+    </div>
+    <div class="form-group" id="pf-blaze-actions">
+      <label>Blaze Account</label>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;">
+        <button class="btn btn-blaze-connect btn-sm" onclick="connectBlaze()">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+          Connect / Reconnect Blaze
+        </button>
+        <button class="btn btn-ghost btn-sm" style="border-color:var(--red);color:var(--red);" onclick="disconnectBlaze()">Disconnect Blaze</button>
+      </div>
+    </div>
+    <div class="form-group">
+      <label>I am a...</label>
+      <div style="display:flex;gap:16px;">
+        <label style="display:flex;align-items:center;gap:6px;font-size:0.85rem;"><input type="radio" name="pf-role" value="clipper" checked/> Clipper</label>
+        <label style="display:flex;align-items:center;gap:6px;font-size:0.85rem;"><input type="radio" name="pf-role" value="streamer"/> Streamer</label>
+      </div>
+    </div>
+    <button class="btn btn-primary" style="width:100%;" onclick="saveProfile()">💾 Save Profile</button>
   </div>
 </div>
 
@@ -3228,9 +3597,9 @@ textarea { resize: vertical; min-height: 76px; }
   animation:livePulse 1.5s ease-in-out infinite;
 }
 
-/* ── HOTEMIN-STYLE DASHBOARD TABS ── */
+/* ── HOTEMIN-STYLE DASHBOARD TABS (now hidden — navigation moved to the drawer, elements kept for active-state tracking) ── */
 .dash-tabbar {
-  display:flex;
+  display:none;
   background:var(--card);
   border-bottom:2px solid var(--border);
   overflow-x:auto;
@@ -3749,6 +4118,85 @@ textarea { resize: vertical; min-height: 76px; }
       <div class="docs-card"><h4>In Progress</h4><p>Blaze clip verification using clipId, streamer analytics page, mobile UX polish, token refresh reliability improvements.</p></div>
       <div class="docs-card"><h4>Planned</h4><p>Mainnet launch with real $BLAZE, Blaze chat bot shoutouts when a bounty is won, clipper leaderboard, reputation system tied to Blaze channel stats.</p></div>
       <div class="docs-card"><h4>Future</h4><p>DAO governance for platform parameters, tiered bounties with Blaze subscription gating, channel-exclusive bounties for subscribers only, VOD-timestamped clip verification.</p></div>
+    </div>
+  </div>
+</div>
+
+<!-- ==================== HOW TO EARN ==================== -->
+<div id="page-how-to-earn" class="page">
+  <div class="container docs-wrap">
+    <div class="docs-hero">
+      <div style="font-size:0.75rem;color:var(--orange);font-weight:700;text-transform:uppercase;letter-spacing:0.1em;margin-bottom:8px;">Guide</div>
+      <h1>How to Earn on BlazeDAO</h1>
+      <p style="color:var(--muted);max-width:520px;margin:0 auto;font-size:0.9rem;line-height:1.6;">Two ways to earn $BLAZE — as a clipper who gets paid for clips, or as a streamer who grows their channel through bounty-driven content.</p>
+    </div>
+
+    <div class="info-tip"><span class="info-tip-icon">ℹ️</span><div>New here? Start by connecting your wallet, then link your <b>Blaze account</b> from your <a href="#" onclick="event.preventDefault();showPage('dashboard');switchTab('tab-profile',document.getElementById('nav-profile'));">Profile</a> — it verifies who you are and unlocks bounty tagging.</div></div>
+
+    <div class="docs-section" id="earn-clipper">
+      <div class="docs-section-title">🎬 Earning as a Clipper</div>
+      <div class="docs-card">
+        <h4>1. Browse open bounties</h4>
+        <p>Head to the <a href="#" onclick="event.preventDefault();showPage('bounties');" style="color:var(--orange);">Bounties</a> page and find one that matches a stream you actually watch. Read the description and any special requirements carefully — submissions that miss the brief don't get picked.</p>
+      </div>
+      <div class="docs-card"><h4>2. Watch, clip, post to X</h4><p>Clip the moment the bounty is asking for from the streamer's Blaze VOD or live stream, then post that clip to X (Twitter). Tag the streamer's X handle shown on the bounty if one is listed.</p></div>
+      <div class="docs-card"><h4>3. Submit your link on-chain</h4><p>Paste your X post link into the bounty's submission box. This is recorded on Avalanche Fuji, so there's no way for a streamer to quietly ignore a winning entry — the contract requires them to pick from what was actually submitted.</p></div>
+      <div class="docs-card"><h4>4. Get picked — or get votes</h4><p>In <b>Streamer Picks</b> mode, the streamer reviews every submission and chooses the winner(s) manually. In <b>Community Vote</b> mode, anyone can vote and the highest-voted clip automatically wins once the deadline passes — so rallying your own audience to vote genuinely helps.</p></div>
+      <div class="docs-card"><h4>5. Claim your $BLAZE</h4><p>Once a winner is chosen, head to your <a href="#" onclick="event.preventDefault();showPage('dashboard');switchTab('tab-submissions',document.getElementById('nav-submissions'));" style="color:var(--orange);">Activity</a> tab and hit claim — the reward goes straight to your wallet. Nobody has to send it manually, and nobody can hold it back.</p></div>
+      <div class="docs-card" style="margin-top:10px;"><h4>💡 Tips that actually move the needle</h4><p>Submit early — some bounties reward multiple winners, so being first with a solid clip beats being late with a great one. Keep clips short and punchy. Follow every listed requirement exactly (watermark, length limits, no reposting). And link your X account in your profile so your submissions carry a verified badge.</p></div>
+    </div>
+
+    <div class="docs-section" id="earn-streamer">
+      <div class="docs-section-title">🎮 Earning &amp; Growing as a Streamer</div>
+      <div class="docs-card"><p>Streamers don't get paid directly by BlazeDAO — you fund bounties from your own $BLAZE to get your stream clipped. What you're "earning" is distribution: a wave of clippers actively watching your VODs and pushing your best moments out to X, which is exactly the kind of promotion that grows follower counts, subs, and live viewership on Blaze.</p></div>
+      <div class="docs-card"><h4>1. Post a bounty tied to your stream</h4><p>Go to <a href="#" onclick="event.preventDefault();showPage('dashboard');switchTab('tab-post',document.getElementById('nav-post'));" style="color:var(--orange);">Post a Bounty</a>, lock a $BLAZE reward in escrow, and describe exactly what kind of moment you want clipped. The more specific the brief, the better the clips you'll get back.</p></div>
+      <div class="docs-card"><h4>2. Let the escrow do the work</h4><p>Because the $BLAZE is locked in a smart contract the moment you post, clippers know the reward is real and guaranteed — that trust is what gets serious clippers to actually compete for your bounty instead of ignoring it.</p></div>
+      <div class="docs-card"><h4>3. Pick winners or let the community decide</h4><p>Review submissions yourself, or use Community Vote mode to turn winner-selection into an engagement moment for your own audience.</p></div>
+      <div class="docs-card"><h4>4. Compounding growth</h4><p>Every clip posted to X with your handle tagged is a new discovery surface. Run bounties consistently around your streams and clippers start watching your channel by default — turning your community into an always-on promo engine.</p></div>
+      <div class="docs-card" style="margin-top:10px;"><h4>💡 Getting the most from a bounty</h4><p>Set a realistic reward for the size of clip you want — bigger rewards pull in more competition. Use the "Number of Winners" setting to reward more than one great clip per bounty. And keep the submission window tight (a few hours) right after a big stream moment, while it's still fresh.</p></div>
+    </div>
+
+    <div class="docs-section">
+      <div class="docs-section-title">Still have questions?</div>
+      <div class="docs-card"><p>Check the full <a href="#" onclick="event.preventDefault();showPage('docs');" style="color:var(--orange);">Docs</a> page for how the smart contract and Blaze API integration work under the hood, or reach out through <a href="#" onclick="event.preventDefault();showPage('support');" style="color:var(--orange);">Support</a> if something isn't working as expected.</p></div>
+    </div>
+  </div>
+</div>
+
+<!-- ==================== SUPPORT ==================== -->
+<div id="page-support" class="page">
+  <div class="container docs-wrap">
+    <div class="docs-hero">
+      <div style="font-size:0.75rem;color:var(--orange);font-weight:700;text-transform:uppercase;letter-spacing:0.1em;margin-bottom:8px;">We're here to help</div>
+      <h1>Support</h1>
+      <p style="color:var(--muted);max-width:520px;margin:0 auto;font-size:0.9rem;line-height:1.6;">Found a bug? Have an idea to make BlazeDAO better? Open a ticket below and we'll take a look.</p>
+    </div>
+
+    <div class="info-tip"><span class="info-tip-icon">ℹ️</span><div>Be as specific as you can — what you were doing, what you expected, and what happened instead. If it's a transaction issue, include the bounty ID or a link if you have one.</div></div>
+
+    <div class="docs-card" style="max-width:560px;margin:0 auto;">
+      <div class="form-group">
+        <label>Subject</label>
+        <input type="text" id="sup-subject" placeholder="Short summary — e.g. 'Claim button not working'"/>
+      </div>
+      <div class="form-group">
+        <label>Category</label>
+        <select id="sup-category">
+          <option value="bug">🐞 Bug Report</option>
+          <option value="suggestion">💡 Feature Suggestion</option>
+          <option value="wallet">🔑 Wallet / Transaction Issue</option>
+          <option value="bounty">🎯 Bounty Issue</option>
+          <option value="account">👤 Account / Profile Issue</option>
+          <option value="other">❓ Other</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>Message</label>
+        <textarea id="sup-message" rows="6" placeholder="Tell us what's going on..."></textarea>
+      </div>
+      <button class="btn btn-primary" style="width:100%;" onclick="submitSupportTicket()">🛟 Submit Ticket</button>
+      <div id="sup-status" class="tx-status" style="display:none;"></div>
+      <p class="pb-hint" style="margin-top:12px;">Tickets are linked to your wallet address if connected, so we can follow up on account-specific issues faster.</p>
     </div>
   </div>
 </div>
