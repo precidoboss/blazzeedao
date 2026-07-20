@@ -1,4 +1,8 @@
 // api/blaze/channel.js -> GET /api/blaze/channel?wallet=0x...
+// Talks to the real Blaze API (https://dev.blaze.stream/docs/apis/channels) using
+// the streamer's own User Access Token, so no channelId query param is needed
+// for /stats or /live-stats (they default to the token owner's channel).
+// /vods and /clips DO require channelId per the docs, even with a user token.
 const supabase = require('../_supabase.js');
 const BLAZE_API = 'https://api.blaze.stream/v1';
 
@@ -87,23 +91,58 @@ module.exports = async (req, res) => {
       // Continue with stored values — don't abort
     }
 
-    // Fetch channel data — all optional, never crash
-    let stats = {}, live = {}, vods = [], clips = [];
+    // Fetch channel data — all optional, never crash.
+    // /stats and /live-stats use a User Access Token, so they implicitly
+    // target the token owner's own channel — no channelId needed there.
+    // /vods and /clips require channelId explicitly, per the Blaze docs.
+    let stats = {}, live = {}, vods = [], clips = [], lastStream = null;
     if (channelId) {
       const [sR, lR, vR, cR] = await Promise.allSettled([
-        blazeGet(`/channels/${channelId}/stats`, token),
-        blazeGet(`/channels/${channelId}/live-stats`, token),
-        blazeGet(`/channels/${channelId}/vods?orderBy=most_recent&limit=5`, token),
+        blazeGet(`/channels/stats`, token),
+        blazeGet(`/channels/live-stats`, token),
+        blazeGet(`/channels/vods?channelId=${channelId}&orderBy=most_recent&limit=5`, token),
         blazeGet(`/channels/clips?channelId=${channelId}&limit=5&orderBy=most_recent`, token)
       ]);
-      if (sR.status==='fulfilled') { const d=sR.value.data||sR.value; stats={followers:d.followersCount||d.followers||0,subscribers:d.subscribersCount||d.subscribers||0,totalViews:d.totalViews||0}; }
-      if (lR.status==='fulfilled') { const d=lR.value.data||lR.value; live={isLive:!!(d.isLive||d.is_live||d.live),viewers:d.viewerCount||d.viewers||0,title:d.title||null,game:d.game?.name||d.category?.name||null}; }
-      if (vR.status==='fulfilled') { const rows=vR.value.data||vR.value.rows||vR.value.vods||vR.value||[]; vods=(Array.isArray(rows)?rows:[]).slice(0,5).map(v=>({id:v.id,title:v.title,duration:v.duration,thumbnail:v.thumbnailUrl||v.previewImgUrl||null,url:v.url||v.vodUrl||(username?`https://blaze.stream/${username}/videos/${v.id}`:null)})); }
-      if (cR.status==='fulfilled') { const rows=cR.value.data||cR.value.rows||cR.value.clips||cR.value||[]; clips=(Array.isArray(rows)?rows:[]).slice(0,5).map(c=>({id:c.id||c.clipId,title:c.title,views:c.viewCount||c.views||0,thumbnail:c.previewImgUrl||c.thumbnailUrl||null,url:c.clipUrl||c.url||null})); }
+      if (sR.status==='fulfilled') {
+        const d = sR.value.data || sR.value;
+        stats = { followers: d.followerCount || d.followersCount || d.followers || 0,
+                   subscribers: d.subscriberCount || d.subscribersCount || d.subscribers || 0,
+                   viewers: d.viewerCount || 0 };
+      }
+      if (lR.status==='fulfilled') {
+        const d = lR.value.data || lR.value;
+        live = { isLive: !!(d.isLive || d.is_live || d.live),
+                 viewers: d.viewerCount || d.viewers || 0,
+                 startedAt: d.startedAt || null,
+                 newFollowers: d.newFollowerCount || 0,
+                 newSubscribers: d.newSubscriberCount || 0 };
+      }
+      if (vR.status==='fulfilled') {
+        const rows = vR.value.data?.rows || vR.value.data || vR.value.rows || vR.value.vods || vR.value || [];
+        vods = (Array.isArray(rows) ? rows : []).slice(0,5).map(v => ({
+          id: v.id, title: v.title, duration: v.duration, views: v.viewCount || v.views || 0,
+          thumbnail: v.previewImgUrl || v.thumbnailUrl || null,
+          url: v.url || v.vodUrl || (username ? `https://blaze.stream/${username}/videos/${v.id}` : null),
+          // Not every VOD payload includes a timestamp — read defensively and
+          // fall back to null rather than guessing a date.
+          recordedAt: v.createdAt || v.recordedAt || v.publishedAt || v.startedAt || null
+        }));
+        // "Last stream" = most recent VOD, since /stream-info (which had startedAt) is deprecated.
+        if (vods.length) {
+          lastStream = { title: vods[0].title, recordedAt: vods[0].recordedAt, duration: vods[0].duration, views: vods[0].views, thumbnail: vods[0].thumbnail };
+        }
+      }
+      if (cR.status==='fulfilled') {
+        const rows = cR.value.data?.rows || cR.value.data || cR.value.rows || cR.value.clips || cR.value || [];
+        clips = (Array.isArray(rows) ? rows : []).slice(0,5).map(c => ({
+          id: c.id || c.clipId, title: c.title, views: c.viewCount || c.views || 0,
+          thumbnail: c.previewImgUrl || c.thumbnailUrl || null, url: c.clipUrl || c.url || null
+        }));
+      }
       [sR,lR,vR,cR].forEach((r,i)=>{ if(r.status==='rejected') console.log('[channel] endpoint',i,'skipped:',r.reason?.message?.slice(0,80)); });
     }
 
-    res.json({ connected: true, channelId, username, displayName: username, avatarUrl, stats, live, vods, recentClips: clips });
+    res.json({ connected: true, channelId, username, displayName: username, avatarUrl, stats, live, vods, recentClips: clips, lastStream });
   } catch(e) {
     // Catch-all — never 500, return connected:false with error logged
     console.error('[channel] fatal:', e.message);
