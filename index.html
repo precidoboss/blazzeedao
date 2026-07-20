@@ -88,8 +88,37 @@ let blazeProfile = null; // { username, displayName, avatarUrl, id } — set aft
 let bountyMetaCache = {};  // bountyId -> row from bounty_meta table
 let pbXHandleCache = null; // the connected wallet's saved X handle, loaded for the Post Bounty form
 
+// Chainable no-op used when Supabase couldn't be configured, so callers that do
+// db.from(...).select(...).eq(...).maybeSingle() never throw "Cannot read
+// properties of null" — every call resolves to {data:null,error:{message}}.
+function offlineDbStub(message) {
+  const result = Promise.resolve({ data: null, error: { message } });
+  const chain = new Proxy(function(){}, {
+    apply() { return chain; },
+    get(target, prop) {
+      if (prop === 'then') return result.then.bind(result);
+      if (prop === 'catch') return result.catch.bind(result);
+      if (prop === 'finally') return result.finally.bind(result);
+      return () => chain;
+    }
+  });
+  return { from: () => chain };
+}
+
+let _offlineWarned = false;
 function initSupabase() {
-  if (!db && window.supabase && SUPABASE_URL && SUPABASE_KEY) db = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+  if (db) return db;
+  if (window.supabase && SUPABASE_URL && SUPABASE_KEY) {
+    db = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+  } else {
+    db = offlineDbStub('Backend not configured — /api/config did not return Supabase credentials.');
+    if (!_offlineWarned) {
+      _offlineWarned = true;
+      console.error('Supabase not initialized: /api/config returned no credentials. Data features are disabled.');
+      if (typeof toast === 'function') toast('Backend not configured — profile/data features are unavailable', 'error');
+    }
+  }
+  return db;
 }
 
 function toast(msg, type='info') {
