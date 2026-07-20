@@ -8,7 +8,7 @@
 // 3. Save the verified account to Supabase: token row in x_oauth_tokens,
 //    and x_handle/x_verified/x_user_id on the profiles row for that wallet.
 
-const supabase = require('../_supabase.js');
+const supabase = require('../../_supabase.js');
 
 module.exports = async (req, res) => {
   if (req.method !== 'POST') return res.status(405).end();
