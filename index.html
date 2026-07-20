@@ -14,6 +14,7 @@
 const SUPABASE_URL = 'https://riufeblffxwktujsvnsd.supabase.co';
 const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJpdWZlYmxmZnh3a3R1anN2bnNkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODM2NDc3OTcsImV4cCI6MjA5OTIyMzc5N30.PhyMfemGLfQnHrnGGZbbI-qA1uUj2WiKtoC1A5-6v6k';
 const REDIRECT_URI = window.location.href.split('?')[0];
+const X_REDIRECT_URI = REDIRECT_URI + '?provider=x'; // distinct from Blaze's redirect so callbacks can tell them apart
 
 const FUJI_CHAIN_ID = 43113;
 const FUJI_RPCS = [
@@ -381,6 +382,125 @@ async function disconnectBlaze() {
   } catch(e) {
     toast('Could not disconnect: ' + e.message, 'error');
   }
+}
+
+// ==================== X (TWITTER) OAUTH — CONNECT & VERIFY ====================
+// Standard OAuth 2.0 + PKCE flow. Unlike Blaze, X has no "generate-auth-url"
+// helper, so /api/oauth/x/auth-url builds the authorize URL + PKCE pair
+// server-side (so X_CLIENT_SECRET never reaches the browser), and
+// /api/oauth/x/token does the code exchange + saves the verified account to
+// Supabase (profiles.x_handle / x_verified / x_user_id).
+function connectX() {
+  if (!userAddress) { toast('Connect your wallet first', 'error'); return; }
+  sessionStorage.setItem('clipdao_wallet_x', userAddress);
+  fetch('/api/oauth/x/auth-url', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ redirectUri: X_REDIRECT_URI })
+  })
+  .then(r => r.json())
+  .then(data => {
+    if (data.url) {
+      sessionStorage.setItem('x_state', data.state);
+      sessionStorage.setItem('x_verifier', data.codeVerifier);
+      window.location.href = data.url;
+    } else {
+      toast('X connect error: ' + (data.error || JSON.stringify(data)), 'error');
+    }
+  })
+  .catch(e => toast('X connect failed: ' + e.message, 'error'));
+}
+
+// Handles the ?provider=x&code= redirect back from X after user approves
+async function handleXCallback() {
+  const params = new URLSearchParams(window.location.search);
+  const code = params.get('code');
+  if (!code) return;
+  window.history.replaceState({}, '', window.location.pathname);
+
+  const returnedState = params.get('state');
+  const expectedState = sessionStorage.getItem('x_state');
+  if (expectedState && returnedState !== expectedState) {
+    toast('X connect failed — state mismatch, try again', 'error');
+    return;
+  }
+
+  const wallet = sessionStorage.getItem('clipdao_wallet_x') || userAddress || null;
+  try {
+    const r = await fetch('/api/oauth/x/token', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        code,
+        codeVerifier: sessionStorage.getItem('x_verifier') || '',
+        redirectUri: X_REDIRECT_URI,
+        wallet
+      })
+    });
+    const data = await r.json();
+    sessionStorage.removeItem('x_state');
+    sessionStorage.removeItem('x_verifier');
+    sessionStorage.removeItem('clipdao_wallet_x');
+
+    if (data.verified) {
+      toast(`𝕏 Verified: @${data.username}`, 'success');
+      const xInput = document.getElementById('pf-xhandle');
+      if (xInput) xInput.value = data.username;
+      updateXConnectUI({ x_handle: data.username, x_verified: true });
+      if (document.getElementById('page-dashboard')?.classList.contains('active')) loadDashboard();
+    } else {
+      console.error('[x] token error:', JSON.stringify(data));
+      toast(data.error || 'X verification failed', 'error');
+    }
+  } catch(e) {
+    console.error('[x] callback error:', e.message);
+    toast('X callback failed: ' + e.message, 'error');
+  }
+}
+
+// Reflects verified state in the Profile tab: readonly + badge when verified,
+// editable free-text (unverified) otherwise.
+function updateXConnectUI(profile) {
+  const input = document.getElementById('pf-xhandle');
+  const badge = document.getElementById('pf-x-verified-badge');
+  const connectBtn = document.getElementById('pf-x-connect-btn');
+  const disconnectBtn = document.getElementById('pf-x-disconnect-btn');
+  const verified = !!profile?.x_verified;
+
+  if (input) {
+    input.value = profile?.x_handle || input.value;
+    input.readOnly = verified;
+    input.style.opacity = verified ? '0.85' : '1';
+  }
+  if (badge) badge.style.display = verified ? 'inline' : 'none';
+  if (connectBtn) connectBtn.style.display = verified ? 'none' : 'inline-flex';
+  if (disconnectBtn) disconnectBtn.style.display = verified ? 'inline-flex' : 'none';
+}
+
+async function disconnectX() {
+  if (!userAddress) return;
+  if (!confirm('Disconnect your verified X account from this wallet? You can reconnect any time.')) return;
+  try {
+    await fetch('/api/disconnect-x', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ wallet: userAddress })
+    });
+    updateXConnectUI({ x_handle: document.getElementById('pf-xhandle')?.value || '', x_verified: false });
+    toast('X account disconnected', 'info');
+  } catch(e) {
+    toast('Could not disconnect: ' + e.message, 'error');
+  }
+}
+
+// Dispatches the ?code= redirect to whichever provider it belongs to —
+// both Blaze and X return to the same page shape, so /?provider=x is the
+// only thing that tells them apart.
+function handleOAuthCallbacks() {
+  const params = new URLSearchParams(window.location.search);
+  if (!params.get('code')) return;
+  if (params.get('provider') === 'x') handleXCallback();
+  else handleBlazeCallback();
 }
 
 async function refreshBlazeBalance() {
@@ -1726,7 +1846,7 @@ async function loadDashboard() {
   // Pre-fill profile form
   if (profile) {
     document.getElementById('pf-username').value    = profile.username || '';
-    document.getElementById('pf-xhandle').value     = profile.x_handle || '';
+    updateXConnectUI(profile);
     document.getElementById('pf-blazehandle').value = profile.blaze_handle || handle || '';
     const roleInput = document.querySelector(`input[name="pf-role"][value="${profile.role}"]`);
     if (roleInput) roleInput.checked = true;
@@ -2021,7 +2141,7 @@ const exposed = { connectWallet, disconnectWallet, showPage, switchTab, postBoun
   loadPlatformStats, enrichSubmissionCard, setReqMode, addReqItem, loadPbXHandle, shareBounty, postComment,
   toggleFlagBox, submitFlag, loadActivityFeed, claimFaucet,
   onPwSliderInput, onPwAmountInput, setPwMax, filterActivity, filterMyBounties, filterMySubmissions,
-  onPbSliderInput, onPbRewardInput, setPbRewardPct };
+  onPbSliderInput, onPbRewardInput, setPbRewardPct, connectX, disconnectX };
 Object.assign(window, exposed);
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -2029,7 +2149,7 @@ document.addEventListener('DOMContentLoaded', () => {
   loadBounties();
   loadPlatformStats();
   if (window.ethereum?.selectedAddress) connectWallet();
-  handleBlazeCallback();
+  handleOAuthCallbacks();
   handleSharedBountyLink();
 
   // Mode card radio toggle — highlight selected card
@@ -2919,8 +3039,18 @@ textarea { resize: vertical; min-height: 76px; }
         <input type="text" id="pf-username" placeholder="yourname"/>
       </div>
       <div class="form-group">
-        <label>X (Twitter) handle</label>
+        <label>X (Twitter) handle <span id="pf-x-verified-badge" style="display:none;font-size:0.72rem;color:var(--orange);">✓ Verified</span></label>
         <input type="text" id="pf-xhandle" placeholder="yourhandle"/>
+      </div>
+      <div class="form-group" id="pf-x-actions">
+        <label>X Account Verification</label>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;">
+          <button class="btn btn-blaze-connect btn-sm" id="pf-x-connect-btn" onclick="connectX()">
+            𝕏 Connect X Account
+          </button>
+          <button class="btn btn-ghost btn-sm" id="pf-x-disconnect-btn" style="display:none;border-color:var(--red);color:var(--red);" onclick="disconnectX()">Disconnect X</button>
+        </div>
+        <p class="pb-hint">Connecting verifies you actually own this X account — bounty tags and your profile badge only show once verified.</p>
       </div>
       <div class="form-group">
         <label>Blaze handle <span style="font-size:0.72rem;color:var(--orange);">— auto-filled after connecting Blaze</span></label>
