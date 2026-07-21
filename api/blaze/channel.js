@@ -99,13 +99,17 @@ module.exports = async (req, res) => {
     // /stats and /live-stats use a User Access Token, so they implicitly
     // target the token owner's own channel — no channelId needed there.
     // /vods and /clips require channelId explicitly, per the Blaze docs.
-    let stats = {}, live = {}, vods = [], clips = [], lastStream = null;
+    // /users/achievement-stats is creator-level (not per-channel) — tier,
+    // total stream hours, and unique chatters are useful trust signals to
+    // show a clipper deciding whether a bounty's streamer is legit.
+    let stats = {}, live = {}, vods = [], clips = [], lastStream = null, achievements = {};
     if (channelId) {
-      const [sR, lR, vR, cR] = await Promise.allSettled([
+      const [sR, lR, vR, cR, aR] = await Promise.allSettled([
         blazeGet(`/channels/stats`, token),
         blazeGet(`/channels/live-stats`, token),
         blazeGet(`/channels/vods?channelId=${channelId}&orderBy=most_recent&limit=5`, token),
-        blazeGet(`/channels/clips?channelId=${channelId}&limit=5&orderBy=most_recent`, token)
+        blazeGet(`/channels/clips?channelId=${channelId}&limit=5&orderBy=most_recent`, token),
+        blazeGet(`/users/achievement-stats`, token)
       ]);
       if (sR.status==='fulfilled') {
         const d = sR.value.data || sR.value;
@@ -138,15 +142,28 @@ module.exports = async (req, res) => {
       }
       if (cR.status==='fulfilled') {
         const rows = cR.value.data?.rows || cR.value.data || cR.value.rows || cR.value.clips || cR.value || [];
-        clips = (Array.isArray(rows) ? rows : []).slice(0,5).map(c => ({
-          id: c.id || c.clipId, title: c.title, views: c.viewCount || c.views || 0,
-          thumbnail: c.previewImgUrl || c.thumbnailUrl || null, url: c.clipUrl || c.url || null
-        }));
+        clips = (Array.isArray(rows) ? rows : []).slice(0,5).map(c => {
+          const clipId = c.clipId || c.id;
+          return {
+            id: clipId, title: c.title, views: c.viewCount || c.views || 0,
+            duration: c.duration || null,
+            thumbnail: c.previewImgUrl || c.thumbnailUrl || null,
+            // clipUrl from the API is the raw CDN asset — link out to the
+            // public player page instead, which is what blaze.stream/clips/<id>
+            // actually renders (title, player, creator credit, etc.).
+            url: clipId ? `https://blaze.stream/clips/${clipId}` : (c.clipUrl || c.url || null),
+            creator: c.creator?.username || null
+          };
+        });
       }
-      [sR,lR,vR,cR].forEach((r,i)=>{ if(r.status==='rejected') console.log('[channel] endpoint',i,'skipped:',r.reason?.message?.slice(0,80)); });
+      if (aR.status==='fulfilled') {
+        const d = aR.value.data || aR.value;
+        achievements = { tier: d.tier ?? null, streamHours: d.streamHours ?? null, uniqueChatters: d.uniqueChatters ?? null };
+      }
+      [sR,lR,vR,cR,aR].forEach((r,i)=>{ if(r.status==='rejected') console.log('[channel] endpoint',i,'skipped:',r.reason?.message?.slice(0,80)); });
     }
 
-    res.json({ connected: true, channelId, username, displayName: username, avatarUrl, stats, live, vods, recentClips: clips, lastStream });
+    res.json({ connected: true, channelId, username, displayName: username, avatarUrl, stats, live, vods, recentClips: clips, lastStream, achievements });
   } catch(e) {
     // Catch-all — never 500, return connected:false with error logged
     console.error('[channel] fatal:', e.message);
