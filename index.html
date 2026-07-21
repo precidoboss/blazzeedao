@@ -670,9 +670,14 @@ async function linkBlazeToWallet(wallet) {
     });
     const data = await r.json();
     console.log('[link] result:', JSON.stringify(data));
+    if (!r.ok || data.error) {
+      toast(data.error || 'Could not link Blaze account to this wallet', 'error');
+      return; // keep pending_blaze_user_id so a retry (e.g. after clearing the old link) can pick it back up
+    }
     sessionStorage.removeItem('pending_blaze_user_id');
   } catch(e) {
     console.error('[link] error:', e.message);
+    toast('Blaze link failed: ' + e.message, 'error');
   }
 }
 
