@@ -564,7 +564,8 @@ async function checkBlazeStatus() {
       if (!blazeProfile) blazeProfile = { username: data.handle, avatarUrl: data.avatar, id: null };
       else { blazeProfile.username = blazeProfile.username || data.handle; blazeProfile.avatarUrl = blazeProfile.avatarUrl || data.avatar; }
       if (badge) {
-        const av = data.avatar ? `<img src="${escHtml(data.avatar)}" style="width:18px;height:18px;border-radius:50%;object-fit:cover;border:1px solid rgba(255,107,26,0.4);" onerror="this.style.display='none'"/>` : '<svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>';
+        const fallbackIcon = '<svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>';
+        const av = data.avatar ? `<img src="${escHtml(data.avatar)}" style="width:18px;height:18px;border-radius:50%;object-fit:cover;border:1px solid rgba(255,107,26,0.4);" onerror="this.outerHTML='${fallbackIcon}'"/>` : fallbackIcon;
         badge.innerHTML = av + ' ' + escHtml(data.handle || 'Blaze');
       }
       if (btn) btn.style.display = 'none';
@@ -2413,6 +2414,11 @@ async function loadDashboard() {
         </div>
       </div>`;
   }
+
+  // /api/blaze/channel (above) may have just back-filled a missing avatar/handle
+  // into Supabase — re-check status so the top nav badge picks it up immediately
+  // instead of only showing it after the next page reload.
+  if (avatar) checkBlazeStatus();
 
   // Stats cards
   const showStat = (id, cardId, val) => {
