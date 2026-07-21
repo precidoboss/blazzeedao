@@ -13,6 +13,7 @@
 // ==================== CONFIG ====================
 let SUPABASE_URL = '';
 let SUPABASE_KEY = '';
+let WALLETCONNECT_PROJECT_ID = '';
 (function loadRuntimeConfig() {
   try {
     const xhr = new XMLHttpRequest();
@@ -22,6 +23,7 @@ let SUPABASE_KEY = '';
       const cfg = JSON.parse(xhr.responseText);
       SUPABASE_URL = cfg.supabaseUrl || '';
       SUPABASE_KEY = cfg.supabaseKey || '';
+      WALLETCONNECT_PROJECT_ID = cfg.walletConnectProjectId || '';
     } else {
       console.error('Could not load /api/config — status', xhr.status);
     }
@@ -202,44 +204,226 @@ function friendlyError(e) {
   return msg.slice(0, 160);
 }
 
-// ==================== WALLET ====================
-async function connectWallet(opts) {
-  opts = opts || {};
-  if (!window.ethereum) { if (!opts.silent) toast('No wallet found. Install Core or MetaMask.', 'error'); return; }
+// ==================== WALLET (multi-wallet: EIP-6963 + WalletConnect) ====================
+
+// EIP-6963 is the current standard for discovering EVERY installed wallet
+// extension (MetaMask, Core, Rabby, Brave Wallet, OKX, Trust, Coinbase's
+// extension, etc.) instead of only ever seeing whichever one last clobbered
+// window.ethereum. Each wallet announces itself with a proper name + icon +
+// a stable id (rdns) — no library needed, it's just two DOM events.
+let discoveredWallets = []; // [{ info:{uuid,name,icon,rdns}, provider }]
+window.addEventListener('eip6963:announceProvider', (e) => {
+  const { info, provider } = e.detail || {};
+  if (!info || !provider) return;
+  if (!discoveredWallets.some(w => w.info.uuid === info.uuid)) {
+    discoveredWallets.push({ info, provider });
+    if (document.getElementById('wallet-picker-modal')?.classList.contains('active')) renderWalletPicker();
+  }
+});
+window.dispatchEvent(new Event('eip6963:requestProvider'));
+
+let activeRawProvider = null; // the EIP-1193 provider actually in use (an injected wallet, or the WalletConnect session)
+let wcProviderInstance = null; // cached WalletConnect provider, once loaded
+
+// Wallets shown as "install" links when not detected via EIP-6963 — this
+// list is just the picker's fallback UI, it has no bearing on which
+// wallets actually work (any EIP-6963 or WalletConnect-compatible wallet
+// works automatically, detected or not).
+const KNOWN_WALLETS_FALLBACK = [
+  { rdns: 'io.metamask', name: 'MetaMask', installUrl: 'https://metamask.io/download/' },
+  { rdns: 'app.core.extension', name: 'Core', installUrl: 'https://core.app/' },
+  { rdns: 'io.rabby', name: 'Rabby', installUrl: 'https://rabby.io/' }
+];
+
+function openWalletPicker() {
+  renderWalletPicker();
+  document.getElementById('wallet-picker-modal')?.classList.add('active');
+}
+function closeWalletPicker() {
+  document.getElementById('wallet-picker-modal')?.classList.remove('active');
+}
+document.addEventListener('click', e => { if (e.target.id === 'wallet-picker-modal') closeWalletPicker(); });
+
+function renderWalletPicker() {
+  const list = document.getElementById('wallet-picker-list');
+  if (!list) return;
+  const detectedRdns = new Set(discoveredWallets.map(w => w.info.rdns));
+  const notDetected = KNOWN_WALLETS_FALLBACK.filter(w => !detectedRdns.has(w.rdns));
+
+  const tiles = [];
+  discoveredWallets.forEach(w => {
+    tiles.push(`
+      <button class="wallet-tile" onclick="selectInjectedWallet('${escHtml(w.info.uuid)}')">
+        <img src="${escHtml(w.info.icon)}" class="wallet-tile-icon" alt=""/>
+        <span class="wallet-tile-name">${escHtml(w.info.name)}</span>
+        <span class="wallet-tile-badge">Detected</span>
+      </button>`);
+  });
+  // Safety net: a wallet that hasn't implemented EIP-6963 yet won't show up
+  // in discoveredWallets, but may still be sitting on window.ethereum —
+  // don't let it silently disappear from the picker.
+  if (discoveredWallets.length === 0 && window.ethereum) {
+    tiles.push(`
+      <button class="wallet-tile" onclick="selectBrowserWallet()">
+        <div class="wallet-tile-icon wallet-tile-icon-fallback">👛</div>
+        <span class="wallet-tile-name">Browser Wallet</span>
+        <span class="wallet-tile-badge">Detected</span>
+      </button>`);
+  }
+  tiles.push(`
+    <button class="wallet-tile" onclick="selectWalletConnect()">
+      <div class="wallet-tile-icon wallet-tile-icon-fallback">🔗</div>
+      <span class="wallet-tile-name">WalletConnect</span>
+      <span class="wallet-tile-badge wallet-tile-badge-muted">Scan with mobile</span>
+    </button>`);
+  notDetected.forEach(w => {
+    tiles.push(`
+      <a class="wallet-tile wallet-tile-install" href="${escHtml(w.installUrl)}" target="_blank" rel="noreferrer">
+        <div class="wallet-tile-icon wallet-tile-icon-fallback">👛</div>
+        <span class="wallet-tile-name">${escHtml(w.name)}</span>
+        <span class="wallet-tile-badge wallet-tile-badge-muted">Install ↗</span>
+      </a>`);
+  });
+
+  list.innerHTML = tiles.join('') || `<p style="color:var(--muted);font-size:0.85rem;text-align:center;padding:20px 0;">No wallet extensions detected — use WalletConnect above, or install one below.</p>`;
+}
+
+async function selectBrowserWallet() {
+  closeWalletPicker();
   try {
-    provider = new ethers.BrowserProvider(window.ethereum);
+    await finishWalletConnect(window.ethereum, 'window.ethereum');
+  } catch (e) {
+    toast(friendlyError(e), 'error');
+  }
+}
+
+async function selectInjectedWallet(uuid) {
+  const entry = discoveredWallets.find(w => w.info.uuid === uuid);
+  if (!entry) return;
+  closeWalletPicker();
+  try {
+    await finishWalletConnect(entry.provider, entry.info.rdns);
+  } catch (e) {
+    toast(friendlyError(e), 'error');
+  }
+}
+
+// WalletConnect's package isn't a clean drop-in <script> — its published
+// "UMD" build still needs 8+ external libraries (viem, lit, qrcode, etc.)
+// loaded as globals first, which isn't practical for a no-build-step app.
+// esm.sh bundles all of that into one real ES module instead, so a plain
+// `import()` works. Loaded lazily — only when someone actually picks
+// WalletConnect — and wrapped so a failure here can't break anything else.
+async function getWalletConnectProvider() {
+  if (wcProviderInstance) return wcProviderInstance;
+  if (!WALLETCONNECT_PROJECT_ID) throw new Error('WalletConnect isn\'t configured for this app yet');
+  const { EthereumProvider } = await import('https://esm.sh/@walletconnect/ethereum-provider@2.23.10');
+  wcProviderInstance = await EthereumProvider.init({
+    projectId: WALLETCONNECT_PROJECT_ID,
+    chains: [FUJI_CHAIN_ID],
+    optionalChains: [FUJI_CHAIN_ID],
+    showQrModal: true,
+    metadata: {
+      name: 'ClipDAO', description: 'The Blaze-native clipping economy',
+      url: window.location.origin, icons: [BLAZE_LOGO]
+    }
+  });
+  return wcProviderInstance;
+}
+
+async function selectWalletConnect() {
+  closeWalletPicker();
+  try {
+    const wc = await getWalletConnectProvider();
+    await wc.connect(); // opens WalletConnect's own QR modal — scan with any mobile wallet
+    await finishWalletConnect(wc, 'walletconnect');
+  } catch (e) {
+    toast('WalletConnect: ' + (e.message || 'could not connect'), 'error');
+  }
+}
+
+// Shared by every connection path (any injected wallet, or WalletConnect).
+// `rawProvider` is a plain EIP-1193 provider — ethers doesn't care which
+// wallet it came from.
+async function finishWalletConnect(rawProvider, walletId, opts) {
+  opts = opts || {};
+  try {
+    activeRawProvider = rawProvider;
+    provider = new ethers.BrowserProvider(rawProvider);
     if (opts.silent) {
-      // Silent reconnect on page load — only use accounts already authorized, never prompt
       const accts = await provider.send('eth_accounts', []);
-      if (!accts || !accts.length) return;
+      if (!accts || !accts.length) { activeRawProvider = null; provider = null; return false; }
     } else {
       await provider.send('eth_requestAccounts', []);
     }
-    await switchToFuji();
+    await switchToFuji(rawProvider);
     signer = await provider.getSigner();
     userAddress = await signer.getAddress();
+    localStorage.setItem('blazedao_wallet_id', walletId); // remembered for silent reconnect on next visit
     initContracts();
     updateNavWallet();
     await refreshBlazeBalance();
     updateFaucetUI();
-    // If user already did Blaze OAuth before connecting wallet, link now
     if (blazeProfile?.id || sessionStorage.getItem('pending_blaze_user_id')) {
       await linkBlazeToWallet(userAddress);
     }
     if (!opts.silent) toast('Wallet connected');
     loadBounties();
     checkBlazeStatus();
+
+    // React to the wallet itself changing accounts/chains/disconnecting —
+    // a reload is the simplest way to guarantee every bit of derived state
+    // (signer, contracts, balances) is consistent afterward.
+    if (rawProvider.on) {
+      rawProvider.on('accountsChanged', (accts) => { if (!accts || !accts.length) disconnectWallet(); else window.location.reload(); });
+      rawProvider.on('chainChanged', () => window.location.reload());
+      rawProvider.on('disconnect', () => disconnectWallet());
+    }
+    return true;
   } catch (e) {
     if (!opts.silent) toast(friendlyError(e), 'error');
+    return false;
   }
 }
 
-async function switchToFuji() {
+// Kept for backward compatibility (auto-reconnect on page load calls this
+// with {silent:true}) and as the entry point the Connect Wallet buttons
+// already call — non-silent now opens the picker instead of assuming
+// window.ethereum is the only wallet on the page.
+async function connectWallet(opts) {
+  opts = opts || {};
+  if (!opts.silent) { openWalletPicker(); return; }
+
+  const lastWalletId = localStorage.getItem('blazedao_wallet_id');
+  if (!lastWalletId) return;
+
+  if (lastWalletId === 'walletconnect') {
+    try {
+      const wc = await getWalletConnectProvider();
+      if (wc?.session) await finishWalletConnect(wc, 'walletconnect', { silent: true });
+    } catch (e) { console.warn('[wc silent reconnect]', e.message); }
+    return;
+  }
+  if (lastWalletId === 'window.ethereum') {
+    if (window.ethereum) await finishWalletConnect(window.ethereum, 'window.ethereum', { silent: true });
+    return;
+  }
+
+  // EIP-6963 announcements can arrive a beat after page load — give them a moment.
+  await new Promise(r => setTimeout(r, 150));
+  const entry = discoveredWallets.find(w => w.info.rdns === lastWalletId);
+  if (!entry) return; // that extension isn't installed/enabled anymore — just stay disconnected
+  await finishWalletConnect(entry.provider, entry.info.rdns, { silent: true });
+}
+
+async function switchToFuji(rawProvider) {
+  const p = rawProvider || activeRawProvider;
+  if (!p?.request) return; // WalletConnect sessions are already scoped to Fuji via chains:[...] in EthereumProvider.init — nothing to switch
   try {
-    await window.ethereum.request({ method: 'wallet_switchEthereumChain', params: [{ chainId: '0xA869' }] });
+    await p.request({ method: 'wallet_switchEthereumChain', params: [{ chainId: '0xA869' }] });
   } catch (switchError) {
     if (switchError.code === 4902) {
-      await window.ethereum.request({
+      await p.request({
         method: 'wallet_addEthereumChain',
         params: [{
           chainId: '0xA869',
@@ -254,7 +438,12 @@ async function switchToFuji() {
 }
 
 function disconnectWallet() {
+  if (activeRawProvider === wcProviderInstance && wcProviderInstance?.disconnect) {
+    wcProviderInstance.disconnect().catch(() => {});
+  }
   provider = signer = userAddress = escrow = blaze = null;
+  activeRawProvider = null;
+  localStorage.removeItem('blazedao_wallet_id');
   postDraftRestored = false;
   lastPostDraftSaved = null;
   updateNavWallet();
@@ -2633,7 +2822,8 @@ const exposed = { connectWallet, disconnectWallet, showPage, switchTab, postBoun
   loadPlatformStats, enrichSubmissionCard, setReqMode, addReqItem, loadPbXHandle, shareBounty, postComment,
   toggleFlagBox, submitFlag, loadActivityFeed, claimFaucet,
   onPwSliderInput, onPwAmountInput, setPwMax, filterActivity, filterMyBounties, filterMySubmissions,
-  onPbSliderInput, onPbRewardInput, setPbRewardPct, connectX, disconnectX };
+  onPbSliderInput, onPbRewardInput, setPbRewardPct, connectX, disconnectX,
+  openWalletPicker, closeWalletPicker, selectInjectedWallet, selectWalletConnect, selectBrowserWallet };
 Object.assign(window, exposed);
 
 document.addEventListener('DOMContentLoaded', async () => {
@@ -2805,6 +2995,27 @@ textarea { resize: vertical; min-height: 76px; }
 .modal-overlay.active { display: flex; }
 .modal { background: var(--card); border: 1px solid var(--border); border-radius: 14px 14px 0 0; padding: 24px 20px; width: 100%; max-width: 600px; max-height: 92vh; overflow-y: auto; position: relative; }
 .modal h2 { margin-bottom: 16px; color: var(--orange); }
+
+/* ── WALLET PICKER (Privy-style) ── */
+.wallet-picker-box { max-width: 420px; }
+.wallet-picker-list { display: flex; flex-direction: column; gap: 8px; }
+.wallet-tile {
+  display: flex; align-items: center; gap: 12px;
+  width: 100%; padding: 12px 14px;
+  background: var(--dark); border: 1px solid var(--border); border-radius: 12px;
+  cursor: pointer; text-decoration: none; color: var(--text);
+  font-family: var(--font-body); text-align: left;
+  transition: border-color 0.15s, background 0.15s, transform 0.1s;
+}
+.wallet-tile:hover { border-color: rgba(255,107,26,0.5); background: rgba(255,107,26,0.06); transform: translateY(-1px); }
+.wallet-tile:active { transform: translateY(0); }
+.wallet-tile-icon { width: 32px; height: 32px; border-radius: 8px; object-fit: contain; flex-shrink: 0; }
+.wallet-tile-icon-fallback { width: 32px; height: 32px; border-radius: 8px; flex-shrink: 0; background: rgba(255,107,26,0.1); display: flex; align-items: center; justify-content: center; font-size: 1.1rem; }
+.wallet-tile-name { flex: 1; font-weight: 700; font-size: 0.88rem; }
+.wallet-tile-badge { font-size: 0.65rem; font-weight: 800; text-transform: uppercase; letter-spacing: 0.04em; color: var(--orange); background: rgba(255,107,26,0.12); border: 1px solid rgba(255,107,26,0.3); padding: 3px 8px; border-radius: 20px; flex-shrink: 0; }
+.wallet-tile-badge-muted { color: var(--muted); background: rgba(255,255,255,0.04); border-color: var(--border); }
+.wallet-tile-install { opacity: 0.85; }
+.wallet-tile-install:hover { opacity: 1; }
 .modal-close { position: absolute; top: 14px; right: 14px; background: rgba(255,255,255,0.06); border: none; color: var(--muted); font-size: 1rem; cursor: pointer; width: 30px; height: 30px; border-radius: 50%; display: flex; align-items: center; justify-content: center; }
 .modal-close:hover { color: var(--red); background: rgba(232,53,10,0.1); }
 @media (min-width: 600px) {
@@ -3648,6 +3859,16 @@ textarea { resize: vertical; min-height: 76px; }
       </div>
     </div>
 
+  </div>
+</div>
+
+<!-- ==================== WALLET PICKER MODAL ==================== -->
+<div class="modal-overlay" id="wallet-picker-modal">
+  <div class="modal wallet-picker-box">
+    <button class="modal-close" onclick="closeWalletPicker()">✕</button>
+    <h2>Connect a Wallet</h2>
+    <p style="font-size:0.8rem;color:var(--muted);margin:-10px 0 16px;">Choose any installed wallet, or scan a QR code with a wallet on your phone.</p>
+    <div id="wallet-picker-list" class="wallet-picker-list"></div>
   </div>
 </div>
 
