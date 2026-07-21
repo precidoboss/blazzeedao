@@ -77,7 +77,6 @@ module.exports = async (req, res) => {
     let username = row.blaze_username || null;
     let avatarUrl = null;
     let channelId = row.blaze_user_id;
-    let profileErr = null;
 
     try {
       const raw = await blazeGet('/users/profile', token);
@@ -92,7 +91,6 @@ module.exports = async (req, res) => {
         if (username && !row.blaze_username) supabase.from('blaze_oauth_tokens').update({ blaze_username: username }).eq('blaze_user_id', channelId).catch(() => {});
       }
     } catch(e) {
-      profileErr = e.message;
       console.error('[channel] profile err:', e.message);
       // Continue with stored values — don't abort
     }
@@ -162,28 +160,10 @@ module.exports = async (req, res) => {
         const d = aR.value.data || aR.value;
         achievements = { tier: d.tier ?? null, streamHours: d.streamHours ?? null, uniqueChatters: d.uniqueChatters ?? null };
       }
-      const labels = ['stats', 'live-stats', 'vods', 'clips', 'achievement-stats'];
-      [sR,lR,vR,cR,aR].forEach((r,i)=>{
-        if (r.status==='rejected') {
-          const msg = r.reason?.message?.slice(0,120);
-          console.log('[channel] endpoint', labels[i], 'skipped:', msg);
-          callErrors.push(`${labels[i]}: ${msg}`);
-        }
-      });
+      [sR,lR,vR,cR,aR].forEach((r,i)=>{ if(r.status==='rejected') console.log('[channel] endpoint',i,'skipped:',r.reason?.message?.slice(0,80)); });
     }
 
-    // DIAGNOSTIC: only present when something failed, so a normal healthy
-    // response stays clean. If you're seeing empty stats/live/vods/clips
-    // with no obvious cause, check this field directly in the response —
-    // no need to dig through Vercel logs for it. A 401 here almost always
-    // means the stored Blaze access token expired and the refresh (see
-    // tryRefresh() above) also failed — that streamer needs to reconnect
-    // Blaze from their profile to get a fresh token.
-    const _debug = (profileErr || callErrors.length)
-      ? { profileError: profileErr, callErrors, tokenRefreshed: token !== row.access_token }
-      : undefined;
-
-    res.json({ connected: true, channelId, username, displayName: username, avatarUrl, stats, live, vods, recentClips: clips, lastStream, achievements, _debug });
+    res.json({ connected: true, channelId, username, displayName: username, avatarUrl, stats, live, vods, recentClips: clips, lastStream, achievements });
   } catch(e) {
     // Catch-all — never 500, return connected:false with error logged
     console.error('[channel] fatal:', e.message);
