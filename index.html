@@ -349,7 +349,7 @@ function connectBlaze() {
   fetch('/api/oauth/auth-url', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ redirectUri: REDIRECT_URI })
+    body: JSON.stringify({ provider: 'blaze', redirectUri: REDIRECT_URI })
   })
   .then(r => r.json())
   .then(data => {
@@ -402,6 +402,7 @@ async function handleBlazeCallback() {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
+        provider: 'blaze',
         code,
         codeVerifier: sessionStorage.getItem('blaze_verifier') || '',
         redirectUri: REDIRECT_URI,
@@ -490,10 +491,10 @@ async function disconnectBlaze() {
   if (!confirm('Disconnect your Blaze account from this wallet?')) return;
   try {
     const { signature, timestamp } = await signAction('Disconnect Blaze account');
-    await fetch('/api/disconnect-blaze', {
+    await fetch('/api/disconnect', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ wallet: userAddress, signature, timestamp })
+      body: JSON.stringify({ provider: 'blaze', wallet: userAddress, signature, timestamp })
     });
     blazeProfile = null;
     sessionStorage.removeItem('pending_blaze_user_id');
@@ -519,10 +520,10 @@ async function disconnectBlaze() {
 function connectX() {
   if (!userAddress) { toast('Connect your wallet first', 'error'); return; }
   sessionStorage.setItem('clipdao_wallet_x', userAddress);
-  fetch('/api/oauth/x/auth-url', {
+  fetch('/api/oauth/auth-url', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ redirectUri: X_REDIRECT_URI })
+    body: JSON.stringify({ provider: 'x', redirectUri: X_REDIRECT_URI })
   })
   .then(r => r.json())
   .then(data => {
@@ -553,10 +554,11 @@ async function handleXCallback() {
 
   const wallet = sessionStorage.getItem('clipdao_wallet_x') || userAddress || null;
   try {
-    const r = await fetch('/api/oauth/x/token', {
+    const r = await fetch('/api/oauth/token', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
+        provider: 'x',
         code,
         codeVerifier: sessionStorage.getItem('x_verifier') || '',
         redirectUri: X_REDIRECT_URI,
@@ -608,10 +610,10 @@ async function disconnectX() {
   if (!confirm('Disconnect your verified X account from this wallet? You can reconnect any time.')) return;
   try {
     const { signature, timestamp } = await signAction('Disconnect X account');
-    await fetch('/api/disconnect-x', {
+    await fetch('/api/disconnect', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ wallet: userAddress, signature, timestamp })
+      body: JSON.stringify({ provider: 'x', wallet: userAddress, signature, timestamp })
     });
     updateXConnectUI({ x_handle: document.getElementById('pf-xhandle')?.value || '', x_verified: false });
     toast('X account disconnected', 'info');
