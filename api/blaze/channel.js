@@ -36,8 +36,12 @@ async function tryRefresh(row) {
 }
 
 module.exports = async (req, res) => {
-  // Never 500 — always return something useful
-  res.setHeader('Access-Control-Allow-Origin', '*');
+  // Never 500 — always return something useful.
+  // SECURITY: this used to send `Access-Control-Allow-Origin: *`, which let
+  // ANY website make browser requests to this endpoint on a visitor's
+  // behalf. It doesn't leak a secret, but there's no reason to hand it out
+  // cross-origin either — removed, so only same-origin requests (the app
+  // itself) can call it, matching every other endpoint in this project.
   const wallet = String(req.query.wallet || '').toLowerCase();
   if (!wallet || !/^0x[a-f0-9]{40}$/.test(wallet)) return res.status(400).json({ error: 'valid wallet required' });
 
