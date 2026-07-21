@@ -36,6 +36,7 @@ async function tryRefresh(row) {
 }
 
 module.exports = async (req, res) => {
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
   // Never 500 — always return something useful.
   // SECURITY: this used to send `Access-Control-Allow-Origin: *`, which let
   // ANY website make browser requests to this endpoint on a visitor's
