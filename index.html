@@ -553,18 +553,21 @@ function connectBlaze() {
   .catch(e => toast('Blaze connect failed: ' + e.message, 'error'));
 }
 
+let blazeStatusSeq = 0;
 async function checkBlazeStatus() {
   if (!userAddress) return;
+  const seq = ++blazeStatusSeq;
   try {
     const resp = await fetch(`/api/blaze-status?wallet=${userAddress}`);
     const data = await resp.json();
+    if (seq !== blazeStatusSeq) return; // a newer call started after this one — stale, discard
     const badge = document.getElementById('blaze-connected-badge');
     const btn   = document.getElementById('btn-blaze');
     if (data.connected) {
       if (!blazeProfile) blazeProfile = { username: data.handle, avatarUrl: data.avatar, id: null };
       else { blazeProfile.username = blazeProfile.username || data.handle; blazeProfile.avatarUrl = blazeProfile.avatarUrl || data.avatar; }
       if (badge) {
-        const fallbackIcon = '<svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>';
+        const fallbackIcon = "<svg width='11' height='11' viewBox='0 0 24 24' fill='currentColor'><polygon points='13 2 3 14 12 14 11 22 21 10 12 10 13 2'/></svg>";
         const av = data.avatar ? `<img src="${escHtml(data.avatar)}" style="width:18px;height:18px;border-radius:50%;object-fit:cover;border:1px solid rgba(255,107,26,0.4);" onerror="this.outerHTML='${fallbackIcon}'"/>` : fallbackIcon;
         badge.innerHTML = av + ' ' + escHtml(data.handle || 'Blaze');
       }
