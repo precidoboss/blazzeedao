@@ -8,7 +8,7 @@
 <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=DM+Mono:wght@400;500&family=Barlow:wght@400;500;600;700;900&display=swap" rel="stylesheet"/>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎬</text></svg>"/>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/ethers/6.7.0/ethers.umd.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.110.7/dist/umd/supabase.js"></script>
 <script>
 // ==================== CONFIG ====================
 let SUPABASE_URL = '';
@@ -145,6 +145,36 @@ function clearTxStatus(id) {
 function escHtml(str) {
   if (str == null) return '';
   return String(str).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+// SECURITY: only allow http(s) URLs to become an href or window.open
+// target. Without this, a clip link submitted directly against the
+// smart contract (bypassing this frontend's own submitClip() regex check)
+// could contain a `javascript:` URI, which would otherwise render as a
+// clickable link that executes script when clicked. Apply this to any
+// href/window.open built from a submitted clip link or an external API
+// response (VOD/clip URLs from Blaze) — never trust those as HTML-safe
+// just because escHtml() was also applied; escHtml only prevents breaking
+// out of the attribute, it doesn't restrict the URL scheme.
+function safeUrl(url) {
+  try {
+    const u = new URL(String(url), window.location.href);
+    return (u.protocol === 'http:' || u.protocol === 'https:') ? u.href : '';
+  } catch (e) { return ''; }
+}
+
+// SECURITY: builds and signs the message api/_verify-signature.js expects,
+// proving to the backend that this browser really controls `userAddress`
+// before it's allowed to link/disconnect Blaze or X, save a profile, or
+// edit a bounty's off-chain metadata. Must stay byte-for-byte in sync with
+// buildMessage() in api/_verify-signature.js — any drift and every
+// signature will fail server-side verification.
+async function signAction(action) {
+  if (!signer || !userAddress) throw new Error('Wallet not connected');
+  const timestamp = Date.now();
+  const message = `BlazeDAO wants you to confirm: ${action}\nWallet: ${userAddress.toLowerCase()}\nTimestamp: ${timestamp}`;
+  const signature = await signer.signMessage(message);
+  return { signature, timestamp };
 }
 
 function timeRemaining(deadline) {
@@ -440,10 +470,11 @@ async function linkBlazeToWallet(wallet) {
   const blazeUserId = blazeProfile?.id || sessionStorage.getItem('pending_blaze_user_id');
   if (!blazeUserId || !wallet) { console.warn('[link] missing blazeUserId or wallet'); return; }
   try {
+    const { signature, timestamp } = await signAction('Link Blaze account');
     const r = await fetch('/api/link-wallet', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ blazeUserId, wallet })
+      body: JSON.stringify({ blazeUserId, wallet, signature, timestamp })
     });
     const data = await r.json();
     console.log('[link] result:', JSON.stringify(data));
@@ -458,10 +489,11 @@ async function disconnectBlaze() {
   if (!userAddress) return;
   if (!confirm('Disconnect your Blaze account from this wallet?')) return;
   try {
+    const { signature, timestamp } = await signAction('Disconnect Blaze account');
     await fetch('/api/disconnect-blaze', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ wallet: userAddress })
+      body: JSON.stringify({ wallet: userAddress, signature, timestamp })
     });
     blazeProfile = null;
     sessionStorage.removeItem('pending_blaze_user_id');
@@ -575,10 +607,11 @@ async function disconnectX() {
   if (!userAddress) return;
   if (!confirm('Disconnect your verified X account from this wallet? You can reconnect any time.')) return;
   try {
+    const { signature, timestamp } = await signAction('Disconnect X account');
     await fetch('/api/disconnect-x', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ wallet: userAddress })
+      body: JSON.stringify({ wallet: userAddress, signature, timestamp })
     });
     updateXConnectUI({ x_handle: document.getElementById('pf-xhandle')?.value || '', x_verified: false });
     toast('X account disconnected', 'info');
@@ -677,20 +710,21 @@ async function saveProfile() {
   if (!userAddress) { toast('Connect wallet first', 'error'); return; }
   const username = document.getElementById('pf-username')?.value.trim();
   const xHandle = document.getElementById('pf-xhandle')?.value.trim().replace(/^@/, '');
-  const blazeHandle = document.getElementById('pf-blazehandle')?.value.trim();
   const role = document.querySelector('input[name="pf-role"]:checked')?.value || 'clipper';
   if (!username || !xHandle) { toast('Username and X handle are required', 'error'); return; }
-  initSupabase();
   try {
-    await db.from('profiles').upsert({
-      wallet: userAddress.toLowerCase(),
-      username, x_handle: xHandle, blaze_handle: blazeHandle, role,
-      updated_at: new Date().toISOString()
-    }, { onConflict: 'wallet' });
+    const { signature, timestamp } = await signAction('Save profile');
+    const r = await fetch('/api/save-profile', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ wallet: userAddress, username, xHandle, role, signature, timestamp })
+    });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error || 'Save failed');
     toast('Profile saved');
     closeEditProfile();
     loadDashboard();
-  } catch(e) { toast('Could not save profile: ' + e.message, 'error'); }
+  } catch(e) { toast('Could not save profile: ' + (e.message || e), 'error'); }
 }
 
 async function loadProfile() {
@@ -1086,8 +1120,15 @@ async function loadPbXHandle() {
 // schedule, winner count, X handle) into Supabase, keyed by the on-chain bounty id.
 async function saveBountyMeta(bountyId, meta) {
   try {
-    initSupabase();
-    const row = {
+    const { signature, timestamp } = await signAction(`Save bounty #${bountyId} details`);
+    const r = await fetch('/api/bounty-meta', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ bountyId, wallet: userAddress, signature, timestamp, meta })
+    });
+    const data = await r.json();
+    if (!r.ok) { console.error('saveBountyMeta failed:', data.error); return; }
+    bountyMetaCache[bountyId] = {
       bounty_id: bountyId,
       streamer_wallet: userAddress.toLowerCase(),
       stream_title: meta.streamTitle || null,
@@ -1100,9 +1141,6 @@ async function saveBountyMeta(bountyId, meta) {
       schedule_timezone: meta.scheduleTz || null,
       num_winners: meta.numWinners || 1
     };
-    const { error } = await db.from('bounty_meta').upsert(row, { onConflict: 'bounty_id' });
-    if (error) console.error('saveBountyMeta failed:', error);
-    else bountyMetaCache[bountyId] = row;
   } catch(e) { console.error('saveBountyMeta failed:', e); }
 }
 
@@ -1711,7 +1749,7 @@ function renderClipEmbed(link) {
   const tweetId = extractTweetId(link);
   if (tweetId) {
     const uid = 'tw_' + tweetId + '_' + Math.random().toString(36).slice(2,7);
-    const fallbackHTML = `<div class="clip-embed-fallback"><svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-4.714-6.231-5.401 6.231H2.742l7.73-8.835L1.254 2.25H8.08l4.258 5.636 5.906-5.636z"/></svg><a href="${escHtml(link)}" target="_blank" rel="noreferrer" class="clip-embed-link">${escHtml(link.replace('https://',''))}</a><a href="${escHtml(link)}" target="_blank" rel="noreferrer" class="btn btn-ghost btn-sm">↗ Open</a></div>`;
+    const fallbackHTML = `<div class="clip-embed-fallback"><svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-4.714-6.231-5.401 6.231H2.742l7.73-8.835L1.254 2.25H8.08l4.258 5.636 5.906-5.636z"/></svg><a href="${escHtml(safeUrl(link))}" target="_blank" rel="noreferrer" class="clip-embed-link">${escHtml(link.replace('https://',''))}</a><a href="${escHtml(safeUrl(link))}" target="_blank" rel="noreferrer" class="btn btn-ghost btn-sm">↗ Open</a></div>`;
     const mount = () => {
       const el = document.getElementById(uid);
       if (!el || !window.twttr?.widgets) return;
@@ -1751,7 +1789,7 @@ function renderClipEmbed(link) {
     return `<div id="${uid}" class="clip-embed-tweet"><div class="clip-embed-loading" style="color:var(--muted);font-size:0.78rem;">Loading clip…</div></div>`;
   }
   // Fallback chip for non-X links
-  return `<div class="clip-embed-fallback"><svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-4.714-6.231-5.401 6.231H2.742l7.73-8.835L1.254 2.25H8.08l4.258 5.636 5.906-5.636z"/></svg><a href="${escHtml(link)}" target="_blank" rel="noreferrer" class="clip-embed-link">${escHtml(link.replace('https://',''))}</a><a href="${escHtml(link)}" target="_blank" rel="noreferrer" class="btn btn-ghost btn-sm">↗ Open</a></div>`;
+  return `<div class="clip-embed-fallback"><svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-4.714-6.231-5.401 6.231H2.742l7.73-8.835L1.254 2.25H8.08l4.258 5.636 5.906-5.636z"/></svg><a href="${escHtml(safeUrl(link))}" target="_blank" rel="noreferrer" class="clip-embed-link">${escHtml(link.replace('https://',''))}</a><a href="${escHtml(safeUrl(link))}" target="_blank" rel="noreferrer" class="btn btn-ghost btn-sm">↗ Open</a></div>`;
 }
 
 // Cache of clipper profiles by wallet: wallet -> {handle, avatar}
@@ -1809,7 +1847,7 @@ function submissionHTML(s, i, bountyId, b, isStreamer, isCommunityVote, isOpen, 
           ${s.isWinner ? '<span class="sub-winner-badge">🏆 WINNER</span>' : ''}
           <span class="sub-time">${timeAgo(s.timestamp || 0)}</span>
         </div>
-        <a href="${escHtml(s.clipLink)}" target="_blank" rel="noreferrer" class="sub-link" onclick="event.stopPropagation()">${escHtml(s.clipLink.replace('https://','').slice(0,55))}${s.clipLink.length>55?'…':''}</a>
+        <a href="${escHtml(safeUrl(s.clipLink))}" target="_blank" rel="noreferrer" class="sub-link" onclick="event.stopPropagation()">${escHtml(s.clipLink.replace('https://','').slice(0,55))}${s.clipLink.length>55?'…':''}</a>
       </div>
       ${isCommunityVote ? `<div class="sub-vote-box"><div class="sub-vote-num">${Number(s.voteCount)}</div><div class="sub-vote-label">votes</div></div>` : ''}
     </div>
@@ -2186,7 +2224,7 @@ async function loadDashboard() {
   if (vodsSection && vodsList && mergedChannel?.vods?.length) {
     vodsSection.style.display = 'block';
     vodsList.innerHTML = mergedChannel.vods.map(v => `
-      <div class="vod-row" onclick="${v.url ? `window.open('${escHtml(v.url)}','_blank')` : ''}">
+      <div class="vod-row" onclick="${v.url ? `window.open('${escHtml(safeUrl(v.url))}','_blank')` : ''}">
         ${v.thumbnail
           ? `<img src="${escHtml(v.thumbnail)}" class="vod-thumb" onerror="this.style.background='rgba(255,107,26,0.08)';this.src=''" />`
           : '<div class="vod-thumb" style="background:rgba(255,107,26,0.08);display:flex;align-items:center;justify-content:center;font-size:1.2rem;">🎬</div>'}
@@ -2204,7 +2242,7 @@ async function loadDashboard() {
   if (clipsSection && clipsList && mergedChannel?.recentClips?.length) {
     clipsSection.style.display = 'block';
     clipsList.innerHTML = mergedChannel.recentClips.map(c => `
-      <div class="vod-row" onclick="${c.url ? `window.open('${escHtml(c.url)}','_blank')` : ''}">
+      <div class="vod-row" onclick="${c.url ? `window.open('${escHtml(safeUrl(c.url))}','_blank')` : ''}">
         ${c.thumbnail
           ? `<img src="${escHtml(c.thumbnail)}" class="vod-thumb" onerror="this.style.background='rgba(255,107,26,0.08)'"/>`
           : '<div class="vod-thumb" style="background:rgba(255,107,26,0.08);display:flex;align-items:center;justify-content:center;font-size:1.2rem;">🎥</div>'}
@@ -2376,7 +2414,7 @@ async function loadMyStats() {
       <div class="pf-stat-card"><div class="pf-stat-num">${submissionsMade}</div><div class="pf-stat-label">Clips Submitted</div></div>
       <div class="pf-stat-card"><div class="pf-stat-num">${wins}</div><div class="pf-stat-label">Bounties Won</div></div>
       <div class="pf-stat-card"><div class="pf-stat-num">${ethers.formatUnits(claimable, blazeDecimals || 18)}</div><div class="pf-stat-label">Unclaimed $BLAZE</div></div>
-      <div class="pf-stat-card"><div class="pf-stat-num">${lifetimeEarned.toLocaleString()}</div><div class="pf-stat-label">$BLAZE Earned (since tracking)</div></div>
+      <div class="pf-stat-card"><div class="pf-stat-num">${lifetimeEarned.toLocaleString()}</div><div class="pf-stat-label">$BLAZE Earned (self-reported, unverified)</div></div>
       <div class="pf-stat-card"><div class="pf-stat-num">${commentCount || 0}</div><div class="pf-stat-label">Comments Posted</div></div>
     `;
   } catch(e) {
