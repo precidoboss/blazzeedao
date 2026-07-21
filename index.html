@@ -808,13 +808,22 @@ async function fetchStreamerProfile(wallet) {
           viewers:     ch.live?.viewers || 0,
           followers:   ch.stats?.followers    || 0,
           subscribers: ch.stats?.subscribers  || 0,
-          lastStream:  ch.lastStream || null
+          lastStream:  ch.lastStream || null,
+          recentClips: ch.recentClips || [],
+          achievements: ch.achievements || {}
         };
         streamerCache[wallet] = enriched;
         // Re-enrich any already-rendered cards with the richer data
         document.querySelectorAll(`[data-bounty-id]`).forEach(card => {
           if (card.dataset.streamer === wallet) enrichBountyCard(card.dataset.bountyId, wallet);
         });
+        // If the bounty detail page is open for this exact streamer, redraw
+        // it too — clips/achievements/live status arrive slightly after the
+        // page's first render since they come from a separate, slower fetch.
+        if (currentBountyId !== null && currentBountyStreamer === wallet) {
+          const isStreamer = !!(userAddress && userAddress.toLowerCase() === wallet);
+          enrichBountyDetailStreamer(currentBountyId, wallet, isStreamer);
+        }
       })
       .catch(() => {});
     streamerCache[wallet] = base;
@@ -1357,6 +1366,7 @@ async function postBounty() {
 
 // ==================== BOUNTY DETAIL ====================
 let currentBountyId = null;
+let currentBountyStreamer = null; // lowercase wallet of the bounty currently open on the detail page — lets late-arriving Blaze data (clips, live status) know it's safe to redraw
 
 async function openBountyDetail(bountyId, opts) {
   opts = opts || {};
@@ -1379,6 +1389,7 @@ async function openBountyDetail(bountyId, opts) {
     const reward       = parseFloat(ethers.formatUnits(b.reward, blazeDecimals));
     const claimableAmt = parseFloat(ethers.formatUnits(claimRaw, blazeDecimals));
     const isStreamer    = userAddress && userAddress.toLowerCase() === b.streamer.toLowerCase();
+    currentBountyStreamer = b.streamer.toLowerCase();
     const isOpen        = Number(b.status) === STATUS_OPEN;
     const isCommunityVote = Number(b.mode) === MODE_COMMUNITY_VOTE;
     const deadlinePassed  = Math.floor(Date.now()/1000) >= Number(b.deadline);
@@ -1707,6 +1718,8 @@ async function enrichBountyDetailStreamer(bountyId, wallet, isStreamer) {
   const el = document.getElementById(`bd-streamer-${bountyId}`);
   if (!el) return;
   const info = await fetchStreamerProfile(wallet);
+  const ach = info.achievements || {};
+  const hasAch = ach.tier != null || ach.streamHours != null || ach.uniqueChatters != null;
   el.innerHTML = `
     <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
       ${info.avatar
@@ -1720,9 +1733,24 @@ async function enrichBountyDetailStreamer(bountyId, wallet, isStreamer) {
           ${info.subscribers ? `<span style="font-size:0.68rem;color:var(--muted);">⭐ ${Number(info.subscribers).toLocaleString()} subs</span>` : ''}
         </div>
         ${!info.isLive && info.lastStream ? `<div style="font-size:0.68rem;color:var(--muted);margin-top:4px;">🎬 Last stream: ${escHtml(info.lastStream.title || 'Untitled')}${info.lastStream.recordedAt ? ' · ' + timeAgo(Math.floor(new Date(info.lastStream.recordedAt).getTime()/1000)) : ''}</div>` : ''}
+        ${hasAch ? `<div style="font-size:0.66rem;color:var(--muted);margin-top:4px;display:flex;gap:8px;flex-wrap:wrap;">${ach.tier != null ? `<span>🏅 Tier ${escHtml(String(ach.tier))} creator</span>` : ''}${ach.streamHours != null ? `<span>⏱ ${Number(ach.streamHours).toLocaleString()}h streamed</span>` : ''}${ach.uniqueChatters != null ? `<span>💬 ${Number(ach.uniqueChatters).toLocaleString()} unique chatters</span>` : ''}</div>` : ''}
       </div>
       ${info.isLive ? `<span class="bd-live-badge">🔴 LIVE</span>` : ''}
-    </div>`;
+    </div>
+    ${(info.recentClips && info.recentClips.length) ? `
+    <div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--border);">
+      <div style="font-size:0.7rem;font-weight:800;text-transform:uppercase;letter-spacing:0.05em;color:var(--muted);margin-bottom:8px;">🎥 Recent clips from this streamer</div>
+      <div style="display:flex;gap:8px;overflow-x:auto;-webkit-overflow-scrolling:touch;padding-bottom:2px;">
+        ${info.recentClips.slice(0, 5).map(c => `
+          <a href="${escHtml(safeUrl(c.url))}" target="_blank" rel="noreferrer" style="flex-shrink:0;width:120px;text-decoration:none;color:inherit;">
+            <div style="width:120px;height:68px;border-radius:8px;overflow:hidden;background:rgba(255,107,26,0.08);position:relative;">
+              ${c.thumbnail ? `<img src="${escHtml(c.thumbnail)}" style="width:100%;height:100%;object-fit:cover;" onerror="this.style.display='none'"/>` : `<div style="width:100%;height:100%;display:flex;align-items:center;justify-content:center;font-size:1.1rem;">🎬</div>`}
+            </div>
+            <div style="font-size:0.66rem;font-weight:600;margin-top:4px;line-height:1.3;overflow:hidden;text-overflow:ellipsis;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;">${escHtml(c.title || 'Untitled clip')}</div>
+            ${c.views ? `<div style="font-size:0.6rem;color:var(--muted);margin-top:2px;">👁 ${Number(c.views).toLocaleString()}</div>` : ''}
+          </a>`).join('')}
+      </div>
+    </div>` : ''}`;
 
   // Populate the banner behind the title with the streamer's Blaze profile picture
   const bannerEl = document.getElementById(`bd-banner-${bountyId}`);
@@ -4319,7 +4347,8 @@ textarea { resize: vertical; min-height: 76px; }
         <div class="docs-api-row"><span class="docs-method docs-method-get">GET</span><div><div class="docs-api-path">api.blaze.stream/v1/channels/stats</div><div class="docs-api-desc">Follower count, subscriber count, viewer count for the authorized channel (User Access Token — no channelId needed). Shown on dashboard overview and bounty cards as social proof.</div></div></div>
         <div class="docs-api-row"><span class="docs-method docs-method-get">GET</span><div><div class="docs-api-path">api.blaze.stream/v1/channels/live-stats</div><div class="docs-api-desc">Real-time live status, viewer count, and stream start time. Powers the pulsing LIVE badge on bounty cards and live viewer count on overview.</div></div></div>
         <div class="docs-api-row"><span class="docs-method docs-method-get">GET</span><div><div class="docs-api-path">api.blaze.stream/v1/channels/vods?channelId=</div><div class="docs-api-desc">Recent VODs with titles, durations, and thumbnails. Streamers pick which VOD their bounty targets, and the most recent VOD powers the "Last stream" indicator shown on the bounty detail page when a streamer isn't currently live.</div></div></div>
-        <div class="docs-api-row"><span class="docs-method docs-method-get">GET</span><div><div class="docs-api-path">api.blaze.stream/v1/channels/clips?channelId=</div><div class="docs-api-desc">Recent Blaze clips — clipId, title, viewCount, previewImgUrl. Shown as channel activity. Planned: use clipId to verify a submitted X clip originated from this Blaze channel.</div></div></div>
+        <div class="docs-api-row"><span class="docs-method docs-method-get">GET</span><div><div class="docs-api-path">api.blaze.stream/v1/channels/clips?channelId=</div><div class="docs-api-desc">Recent Blaze clips — clipId, title, viewCount, previewImgUrl. Shown on every bounty page under the streamer's card, linking out to blaze.stream/clips/&lt;id&gt;. Planned: use clipId to verify a submitted X clip originated from this Blaze channel.</div></div></div>
+        <div class="docs-api-row"><span class="docs-method docs-method-get">GET</span><div><div class="docs-api-path">api.blaze.stream/v1/users/achievement-stats</div><div class="docs-api-desc">Creator tier, total stream hours, and unique chatter count. Shown as a trust signal on the bounty page so a clipper can gauge a streamer's track record before spending time on a submission.</div></div></div>
         <div class="docs-api-row"><span class="docs-method docs-method-get">GET</span><div><div class="docs-api-path">api.blaze.stream/v1/channels</div><div class="docs-api-desc">Cursor-paginated channel listing with live status, follower counts, and category — a candidate source for a future "discover live streamers with open bounties" view.</div></div></div>
       </div>
       <div class="docs-card" style="margin-top:10px;">
