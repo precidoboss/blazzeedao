@@ -2,6 +2,7 @@
 const supabase = require('./_supabase.js');
 
 module.exports = async (req, res) => {
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
   const wallet = String(req.query.wallet || '').toLowerCase();
   if (!/^0x[a-f0-9]{40}$/.test(wallet)) return res.status(400).json({ error: 'invalid wallet' });
 
