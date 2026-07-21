@@ -624,8 +624,6 @@ async function handleBlazeCallback() {
 
       updateBlazeUI();
       toast(`🔥 Blaze connected: @${blazeProfile.username || 'account'}`, 'success');
-      // If wallet already connected, link immediately
-      if (userAddress) await linkBlazeToWallet(userAddress);
       checkBlazeStatus();
     } else {
       console.error('[blaze] token error:', JSON.stringify(data));
