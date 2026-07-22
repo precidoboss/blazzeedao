@@ -36,7 +36,6 @@ async function tryRefresh(row) {
 }
 
 module.exports = async (req, res) => {
-  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
   // Never 500 — always return something useful.
   // SECURITY: this used to send `Access-Control-Allow-Origin: *`, which let
   // ANY website make browser requests to this endpoint on a visitor's
@@ -78,6 +77,7 @@ module.exports = async (req, res) => {
     let username = row.blaze_username || null;
     let avatarUrl = null;
     let channelId = row.blaze_user_id;
+    let profileErr = null;
 
     try {
       const raw = await blazeGet('/users/profile', token);
@@ -92,6 +92,7 @@ module.exports = async (req, res) => {
         if (username && !row.blaze_username) supabase.from('blaze_oauth_tokens').update({ blaze_username: username }).eq('blaze_user_id', channelId).catch(() => {});
       }
     } catch(e) {
+      profileErr = e.message;
       console.error('[channel] profile err:', e.message);
       // Continue with stored values — don't abort
     }
@@ -149,10 +150,12 @@ module.exports = async (req, res) => {
             id: clipId, title: c.title, views: c.viewCount || c.views || 0,
             duration: c.duration || null,
             thumbnail: c.previewImgUrl || c.thumbnailUrl || null,
-            // clipUrl from the API is the raw CDN asset — link out to the
-            // public player page instead, which is what blaze.stream/clips/<id>
-            // actually renders (title, player, creator credit, etc.).
+            // Public player page — what "open the clip" should link to.
             url: clipId ? `https://blaze.stream/clips/${clipId}` : (c.clipUrl || c.url || null),
+            // Raw CDN video asset — used for the inline hover-to-preview
+            // <video> element on the bounty page. Kept separate from `url`
+            // above since they serve different purposes (embed vs. link-out).
+            videoUrl: c.clipUrl || c.videoUrl || null,
             creator: c.creator?.username || null
           };
         });
@@ -161,10 +164,28 @@ module.exports = async (req, res) => {
         const d = aR.value.data || aR.value;
         achievements = { tier: d.tier ?? null, streamHours: d.streamHours ?? null, uniqueChatters: d.uniqueChatters ?? null };
       }
-      [sR,lR,vR,cR,aR].forEach((r,i)=>{ if(r.status==='rejected') console.log('[channel] endpoint',i,'skipped:',r.reason?.message?.slice(0,80)); });
+      const labels = ['stats', 'live-stats', 'vods', 'clips', 'achievement-stats'];
+      [sR,lR,vR,cR,aR].forEach((r,i)=>{
+        if (r.status==='rejected') {
+          const msg = r.reason?.message?.slice(0,120);
+          console.log('[channel] endpoint', labels[i], 'skipped:', msg);
+          callErrors.push(`${labels[i]}: ${msg}`);
+        }
+      });
     }
 
-    res.json({ connected: true, channelId, username, displayName: username, avatarUrl, stats, live, vods, recentClips: clips, lastStream, achievements });
+    // DIAGNOSTIC: only present when something failed, so a normal healthy
+    // response stays clean. If you're seeing empty stats/live/vods/clips
+    // with no obvious cause, check this field directly in the response —
+    // no need to dig through Vercel logs for it. A 401 here almost always
+    // means the stored Blaze access token expired and the refresh (see
+    // tryRefresh() above) also failed — that streamer needs to reconnect
+    // Blaze from their profile to get a fresh token.
+    const _debug = (profileErr || callErrors.length)
+      ? { profileError: profileErr, callErrors, tokenRefreshed: token !== row.access_token }
+      : undefined;
+
+    res.json({ connected: true, channelId, username, displayName: username, avatarUrl, stats, live, vods, recentClips: clips, lastStream, achievements, _debug });
   } catch(e) {
     // Catch-all — never 500, return connected:false with error logged
     console.error('[channel] fatal:', e.message);
