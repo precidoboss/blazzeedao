@@ -4,6 +4,16 @@
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
 <title>ClipDAO — The Blaze Clipping Economy</title>
+<meta name="description" content="Streamers post $BLAZE bounties, clippers submit clips from real Blaze streams, winners get paid automatically on-chain. Built on Avalanche Fuji."/>
+<meta name="theme-color" content="#0A0A0A"/>
+<meta property="og:type" content="website"/>
+<meta property="og:title" content="ClipDAO — The Blaze Clipping Economy"/>
+<meta property="og:description" content="Streamers post $BLAZE bounties, clippers submit clips from real Blaze streams, winners get paid automatically on-chain."/>
+<meta property="og:image" content="https://raw.githubusercontent.com/precidoboss/my-game-sprites/main/24333f4f-66da-4d04-a37e-e03d4c992228-removebg-preview.png"/>
+<meta name="twitter:card" content="summary_large_image"/>
+<meta name="twitter:title" content="ClipDAO — The Blaze Clipping Economy"/>
+<meta name="twitter:description" content="Streamers post $BLAZE bounties, clippers submit clips from real Blaze streams, winners get paid automatically on-chain."/>
+<meta name="twitter:image" content="https://raw.githubusercontent.com/precidoboss/my-game-sprites/main/24333f4f-66da-4d04-a37e-e03d4c992228-removebg-preview.png"/>
 <link rel="preconnect" href="https://fonts.googleapis.com"/>
 <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=DM+Mono:wght@400;500&family=Barlow:wght@400;500;600;700;900&display=swap" rel="stylesheet"/>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎬</text></svg>"/>
@@ -128,13 +138,66 @@ function initSupabase() {
   return db;
 }
 
+// ==================== TOP PAGE-LOADING BAR ====================
+// Tied to real async work (bounty list/detail/dashboard fetches) rather
+// than faked on every click — so it actually reflects when the app is
+// waiting on the chain or an API, not just page-switch animations.
+const pageProgress = {
+  _timer: null,
+  start() {
+    const bar = document.getElementById('page-progress-bar');
+    if (!bar) return;
+    clearTimeout(this._timer);
+    bar.style.transition = 'none';
+    bar.style.width = '0%';
+    bar.classList.add('active');
+    requestAnimationFrame(() => {
+      bar.style.transition = 'width 4s cubic-bezier(0.1,0.6,0.2,1), opacity 0.2s ease';
+      bar.style.width = '80%'; // creeps toward 80%, never claims 100% until done() is called
+    });
+  },
+  done() {
+    const bar = document.getElementById('page-progress-bar');
+    if (!bar) return;
+    bar.style.transition = 'width 0.2s ease, opacity 0.4s ease 0.2s';
+    bar.style.width = '100%';
+    this._timer = setTimeout(() => {
+      bar.classList.remove('active');
+      setTimeout(() => { bar.style.width = '0%'; }, 250);
+    }, 200);
+  }
+};
+
+const TOAST_ICONS = {
+  success: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="12" r="10"/><path d="M8 12l3 3 5-6"/></svg>',
+  error:   '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="13"/><line x1="12" y1="16.5" x2="12" y2="16.5"/></svg>',
+  info:    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="12" r="10"/><line x1="12" y1="10.5" x2="12" y2="16"/><line x1="12" y1="7.5" x2="12" y2="7.5"/></svg>'
+};
+
+function getToastContainer() {
+  let el = document.getElementById('toast-container');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'toast-container';
+    document.body.appendChild(el);
+  }
+  return el;
+}
+
 function toast(msg, type='info') {
+  const container = getToastContainer();
   const el = document.createElement('div');
   el.className = `toast toast-${type}`;
-  el.textContent = msg;
-  document.body.appendChild(el);
+  const duration = 3500;
+  el.innerHTML = `
+    <span class="toast-icon">${TOAST_ICONS[type] || TOAST_ICONS.info}</span>
+    <span class="toast-msg">${escHtml(String(msg))}</span>
+    <button class="toast-close" onclick="this.parentElement.remove()" aria-label="Dismiss">✕</button>
+    <div class="toast-bar" style="animation-duration:${duration}ms;"></div>
+  `;
+  container.appendChild(el);
   setTimeout(()=>el.classList.add('show'), 10);
-  setTimeout(()=>{ el.classList.remove('show'); setTimeout(()=>el.remove(), 300); }, 3500);
+  setTimeout(()=>{ el.classList.remove('show'); setTimeout(()=>el.remove(), 300); }, duration);
 }
 
 function setTxStatus(id, msg, type) {
@@ -1035,11 +1098,47 @@ async function fetchStreamerProfile(wallet) {
   }
 }
 
+// Like fetchStreamerProfile, but fully awaits the enriched Blaze channel
+// fetch (followers/subscribers/live) instead of returning the fast "base"
+// object and enriching later in the background. Cards can tolerate a
+// second-stage update; a ranking algorithm can't — it needs the real
+// numbers before it computes anything, or "Top Ranked" would silently
+// rank everyone by 0 stats on first use. Shares the same cache, so once
+// a wallet's been fully fetched here, plain fetchStreamerProfile() calls
+// elsewhere on the page get the accurate data too.
+async function fetchStreamerProfileFull(wallet) {
+  const cached = streamerCache[wallet];
+  if (cached && cached._full) return cached;
+  const base = await fetchStreamerProfile(wallet); // resolves blaze-status (handle/avatar) at minimum
+  try {
+    const ch = await fetch(`/api/blaze/channel?wallet=${wallet}`).then(r => r.ok ? r.json() : null);
+    if (ch && ch.connected) {
+      const enriched = {
+        handle:       ch.username      || base.handle,
+        avatar:       ch.avatarUrl     || base.avatar,
+        isLive:       ch.live?.isLive  || false,
+        viewers:      ch.live?.viewers || 0,
+        followers:    ch.stats?.followers    || 0,
+        subscribers:  ch.stats?.subscribers  || 0,
+        lastStream:   ch.lastStream || null,
+        recentClips:  ch.recentClips || [],
+        achievements: ch.achievements || {},
+        _full: true
+      };
+      streamerCache[wallet] = enriched;
+      return enriched;
+    }
+  } catch (e) { /* channel fetch failed — fall back to base stats below */ }
+  streamerCache[wallet] = { ...base, _full: true };
+  return streamerCache[wallet];
+}
+
 // ==================== BOUNTIES ====================
 async function loadBounties() {
   const els = ['bounty-list','bounty-list-dash-placeholder'].map(id=>document.getElementById(id)).filter(Boolean);
   if (!els.length) return;
   els.forEach(el=>el.innerHTML='<p style="color:var(--muted);">Loading bounties…</p>');
+  pageProgress.start();
   try {
     const reader = escrowRead || new ethers.Contract(ESCROW_ADDRESS, ESCROW_ABI, new ethers.JsonRpcProvider(FUJI_RPC));
     const count = Number(await reader.bountyCount());
@@ -1065,6 +1164,8 @@ async function loadBounties() {
     items.forEach(b => enrichBountyCard(b.id, b.streamer));
   } catch(e) {
     els.forEach(el=>el.innerHTML=`<p style="color:var(--red);">Could not load bounties: ${escHtml(friendlyError(e))}</p>`);
+  } finally {
+    pageProgress.done();
   }
 }
 
@@ -1578,6 +1679,7 @@ async function openBountyDetail(bountyId, opts) {
   if (!opts.skipUrl) history.pushState({ bountyId }, '', `/bounties/${bountyId}`);
   const el = document.getElementById('bd-content');
   el.innerHTML = `<div style="display:flex;flex-direction:column;gap:12px;padding:20px 0;">${[1,2,3].map(()=>'<div class="skeleton" style="height:60px;border-radius:10px;"></div>').join('')}</div>`;
+  pageProgress.start();
 
   try {
     const reader = escrowRead || new ethers.Contract(ESCROW_ADDRESS, ESCROW_ABI, new ethers.JsonRpcProvider(FUJI_RPC));
@@ -1596,6 +1698,8 @@ async function openBountyDetail(bountyId, opts) {
     const isOpen        = Number(b.status) === STATUS_OPEN;
     const isCommunityVote = Number(b.mode) === MODE_COMMUNITY_VOTE;
     const deadlinePassed  = Math.floor(Date.now()/1000) >= Number(b.deadline);
+    currentBountySubsState = { bountyId, subs, b, isStreamer, isCommunityVote, isOpen, deadlinePassed };
+    currentSubSort = 'time';
     const rewardFmt     = reward >= 1000 ? (reward/1000).toFixed(1)+'K' : reward.toLocaleString(undefined,{maximumFractionDigits:0});
     const postedDate    = b.postedAt ? new Date(Number(b.postedAt)*1000).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}) : '—';
     const deadlineDate  = b.deadline ? new Date(Number(b.deadline)*1000).toLocaleString('en-US',{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'}) : '—';
@@ -1703,14 +1807,20 @@ async function openBountyDetail(bountyId, opts) {
 
       <!-- SUBMISSIONS -->
       <div class="bd-section">
-        <div class="bd-section-title" style="display:flex;justify-content:space-between;align-items:center;">
+        <div class="bd-section-title" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">
           <span>Submissions</span>
           <span style="font-size:0.78rem;color:var(--muted);font-weight:400;">${subs.length} total</span>
         </div>
-        <div class="bd-section-body">
+        ${subs.length > 1 ? `
+        <div class="sub-sort-bar">
+          <span class="sub-sort-label">Sort</span>
+          <button class="sub-sort-btn active" data-sort="time" onclick="setSubSort(${bountyId},'time')">🕐 Newest</button>
+          <button class="sub-sort-btn" data-sort="ranked" onclick="setSubSort(${bountyId},'ranked')" title="Combines vote count, winner status, and each clipper's platform stats (followers, subs, live status) into one ranking">🔥 Top Ranked</button>
+        </div>` : ''}
+        <div class="bd-section-body" id="bd-submissions-list">
           ${subs.length === 0
             ? `<div class="bd-empty">No clips submitted yet.<br/><span style="font-size:0.78rem;">Be the first to submit!</span></div>`
-            : subs.map((s,i) => submissionHTML(s, i, bountyId, b, isStreamer, isCommunityVote, isOpen, deadlinePassed)).join('')}
+            : sortedSubmissionIndexes(subs, 'time').map(i => submissionHTML(subs[i], i, bountyId, b, isStreamer, isCommunityVote, isOpen, deadlinePassed)).join('')}
         </div>
       </div>
 
@@ -1747,6 +1857,8 @@ async function openBountyDetail(bountyId, opts) {
 
   } catch(e) {
     el.innerHTML = `<div class="bd-error"><div style="font-size:1.5rem;margin-bottom:8px;">⚠️</div><div>${escHtml(friendlyError(e))}</div></div>`;
+  } finally {
+    pageProgress.done();
   }
 }
 
@@ -2103,6 +2215,88 @@ async function enrichSubmissionCard(wallet, cardId) {
     nameEl.textContent = '@' + profile.handle;
     nameEl.style.color = 'var(--orange)';
   }
+  // Every clip submission requires a verified X account (enforced in
+  // submitClip) — show that trust signal right on the card.
+  try {
+    initSupabase();
+    const { data } = await db.from('profiles').select('x_verified').eq('wallet', wallet.toLowerCase()).maybeSingle();
+    const badgeEl = document.getElementById('sub-verified-' + cardId);
+    if (badgeEl && data?.x_verified) {
+      badgeEl.innerHTML = `<span class="sub-verified-badge" title="Verified X account"><svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2l2.4 2.4 3.3-.6.6 3.3L21 9.5 18.9 12l2.1 2.5-2.7 1.4-.6 3.3-3.3-.6L12 21l-2.4-2.4-3.3.6-.6-3.3L3 14.5 5.1 12 3 9.5l2.7-1.4.6-3.3 3.3.6L12 2z"/><path d="M9.5 12.5l1.8 1.8 3.2-3.6" stroke="var(--dark)" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg></span>`;
+    }
+  } catch (e) {}
+}
+
+// ==================== SUBMISSIONS: SORT / RANK ====================
+let currentSubSort = 'time';           // 'time' | 'ranked'
+let currentBountySubsState = null;     // cached { bountyId, subs, b, isStreamer, isCommunityVote, isOpen, deadlinePassed } for instant re-sort
+
+function sortedSubmissionIndexes(subs, mode, scores) {
+  const idxs = subs.map((_, i) => i);
+  if (mode === 'ranked' && scores) {
+    idxs.sort((a, b) => (scores[b] || 0) - (scores[a] || 0));
+  } else {
+    idxs.sort((a, b) => Number(subs[b].timestamp || 0) - Number(subs[a].timestamp || 0)); // newest first
+  }
+  return idxs;
+}
+
+function renderSubmissionsListHTML(order) {
+  const st = currentBountySubsState;
+  if (!st) return '';
+  const { subs, bountyId, b, isStreamer, isCommunityVote, isOpen, deadlinePassed } = st;
+  return order.map(i => submissionHTML(subs[i], i, bountyId, b, isStreamer, isCommunityVote, isOpen, deadlinePassed)).join('');
+}
+
+// "Top Ranked" combines several platform stats into one score: vote count,
+// winner status, and the submitting clipper's own Blaze channel stats
+// (followers, subscribers, live status). Uses fetchStreamerProfileFull so
+// every score is computed from real, fully-fetched numbers — never a
+// zero-stats placeholder that would silently misrank someone.
+async function computeSubmissionRankScores(subs) {
+  return Promise.all(subs.map(async (s) => {
+    let statScore = 0;
+    try {
+      const p = await fetchStreamerProfileFull(s.clipper);
+      statScore = (p.followers || 0) * 0.5 + (p.subscribers || 0) * 3 + (p.isLive ? 100 : 0);
+    } catch (e) { /* clipper has no linked Blaze channel — statScore stays 0 */ }
+    const voteScore = Number(s.voteCount || 0) * 200;
+    const winnerScore = s.isWinner ? 10000 : 0;
+    const recencyTiebreak = Number(s.timestamp || 0) / 1e8; // small nudge so ties lean newer
+    return statScore + voteScore + winnerScore + recencyTiebreak;
+  }));
+}
+
+async function setSubSort(bountyId, mode) {
+  if (!currentBountySubsState || currentBountySubsState.bountyId !== bountyId) return;
+  if (currentSubSort === mode) return; // already showing this sort
+  currentSubSort = mode;
+  document.querySelectorAll('.sub-sort-btn').forEach(btn => btn.classList.toggle('active', btn.dataset.sort === mode));
+  const listEl = document.getElementById('bd-submissions-list');
+  if (!listEl || !currentBountySubsState) return;
+  const subs = currentBountySubsState.subs;
+  if (mode === 'time') {
+    listEl.innerHTML = renderSubmissionsListHTML(sortedSubmissionIndexes(subs, 'time'));
+  } else {
+    listEl.innerHTML = `<div style="padding:24px;text-align:center;color:var(--muted);font-size:0.8rem;">🔥 Pulling live stats for every clipper…</div>`;
+    const scores = await computeSubmissionRankScores(subs);
+    listEl.innerHTML = renderSubmissionsListHTML(sortedSubmissionIndexes(subs, 'ranked', scores));
+  }
+}
+
+// ==================== SUBMISSIONS: COLLAPSE CLIP EMBED ====================
+// Each submission's clip embed can be folded down to just its link line —
+// useful for streamers/clippers scanning many submissions quickly. Starts
+// expanded (matches prior behavior); state is per-card, not global.
+function toggleSubEmbed(cardId) {
+  const wrap = document.getElementById('sub-embed-' + cardId);
+  const btn = document.getElementById('sub-collapse-btn-' + cardId);
+  if (!wrap || !btn) return;
+  const collapsed = wrap.classList.toggle('sub-embed-collapsed');
+  btn.innerHTML = collapsed
+    ? '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="6 9 12 15 18 9"/></svg> Show clip'
+    : '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="18 15 12 9 6 15"/></svg> Hide clip';
+  btn.title = collapsed ? 'Show embedded clip' : 'Collapse to link only';
 }
 
 function submissionHTML(s, i, bountyId, b, isStreamer, isCommunityVote, isOpen, deadlinePassed) {
@@ -2120,6 +2314,7 @@ function submissionHTML(s, i, bountyId, b, isStreamer, isCommunityVote, isOpen, 
       <div style="flex:1;min-width:0;">
         <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:3px;">
           <span class="sub-clipper-name" id="sub-name-${cardId}">${escHtml(clipperShort)}</span>
+          <span id="sub-verified-${cardId}"></span>
           ${isMyClip ? '<span style="font-size:0.65rem;color:var(--orange);font-weight:700;">(you)</span>' : ''}
           ${s.isWinner ? '<span class="sub-winner-badge">🏆 WINNER</span>' : ''}
           <span class="sub-time">${timeAgo(s.timestamp || 0)}</span>
@@ -2127,8 +2322,11 @@ function submissionHTML(s, i, bountyId, b, isStreamer, isCommunityVote, isOpen, 
         <a href="${escHtml(safeUrl(s.clipLink))}" target="_blank" rel="noreferrer" class="sub-link" onclick="event.stopPropagation()">${escHtml(s.clipLink.replace('https://','').slice(0,55))}${s.clipLink.length>55?'…':''}</a>
       </div>
       ${isCommunityVote ? `<div class="sub-vote-box"><div class="sub-vote-num">${Number(s.voteCount)}</div><div class="sub-vote-label">votes</div></div>` : ''}
+      <button class="sub-collapse-btn" id="sub-collapse-btn-${cardId}" onclick="toggleSubEmbed('${cardId}')" title="Collapse to link only">
+        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="18 15 12 9 6 15"/></svg> Hide clip
+      </button>
     </div>
-    <div class="sub-embed">${embedHTML}</div>
+    <div class="sub-embed" id="sub-embed-${cardId}">${embedHTML}</div>
     <div class="sub-card-actions">
       ${isCommunityVote && isOpen && !deadlinePassed && !isStreamer ? `<button class="btn btn-ghost btn-sm sub-vote-btn" onclick="voteSubmission(${bountyId},${i})">👍 Vote for this clip</button>` : ''}
       ${isStreamer && Number(b.mode)===MODE_STREAMER_PICK && isOpen ? `
@@ -2426,12 +2624,14 @@ async function loadDashboard() {
   if (!userAddress) { showPage('home'); toast('Connect your wallet first', 'error'); return; }
   refreshBlazeBalance();
   updateFaucetUI();
+  pageProgress.start();
 
   const [profile, statusData, channelData] = await Promise.all([
     loadProfile(),
     fetch(`/api/blaze-status?wallet=${userAddress}`).then(r=>r.json()).catch(()=>null),
     fetch(`/api/blaze/channel?wallet=${userAddress}`).then(r=>r.ok?r.json():null).catch(()=>null)
   ]);
+  pageProgress.done();
   // Merge: channel data wins if available, fall back to statusData then profile
   const mergedChannel = channelData?.connected ? channelData : null;
 
@@ -2929,10 +3129,24 @@ document.addEventListener('DOMContentLoaded', async () => {
 }
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 html { scroll-behavior: smooth; -webkit-text-size-adjust: 100%; }
-body { background: var(--black); color: var(--text); font-family: var(--font-body); font-size: 15px; line-height: 1.6; min-height: 100vh; overflow-x: hidden; }
+body { background: var(--black); color: var(--text); font-family: var(--font-body); font-size: 15px; line-height: 1.6; min-height: 100vh; overflow-x: hidden; scrollbar-color: var(--red) var(--dark); }
+::selection { background: rgba(255,107,26,0.35); color: #fff; }
 ::-webkit-scrollbar { width: 4px; }
 ::-webkit-scrollbar-track { background: var(--dark); }
 ::-webkit-scrollbar-thumb { background: var(--red); border-radius: 2px; }
+a:focus-visible, button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-visible, [tabindex]:focus-visible {
+  outline: 2px solid var(--orange); outline-offset: 2px; border-radius: 4px;
+}
+
+/* TOP PAGE-LOADING PROGRESS BAR */
+#page-progress-bar {
+  position: fixed; top: 0; left: 0; height: 2.5px; width: 0%;
+  background: linear-gradient(90deg, var(--red), var(--orange));
+  z-index: 10001; opacity: 0;
+  transition: width 0.3s ease, opacity 0.2s ease;
+  box-shadow: 0 0 8px rgba(255,107,26,0.6);
+}
+#page-progress-bar.active { opacity: 1; }
 h1,h2,h3,h4 { font-family: var(--font-display); letter-spacing: 1px; line-height: 1.1; }
 h1 { font-size: clamp(2.4rem, 6vw, 5rem); }
 h2 { font-size: clamp(1.6rem, 4vw, 2.8rem); }
@@ -3048,12 +3262,28 @@ textarea { resize: vertical; min-height: 76px; }
 .badge-muted  { background: rgba(136,136,136,0.15); color: var(--muted); border: 1px solid rgba(136,136,136,0.25); }
 
 /* TOAST */
-#toast-container { position: fixed; bottom: 80px; right: 16px; display: flex; flex-direction: column; gap: 6px; z-index: 9999; max-width: 300px; }
-.toast { padding: 10px 14px; border-radius: 6px; font-size: 0.82rem; font-weight: 600; animation: slideIn 0.25s ease; border-left: 3px solid; }
-.toast-success { background: #0a1f12; color: var(--success); border-color: var(--success); }
-.toast-error   { background: #1f0a0a; color: var(--red); border-color: var(--red); }
-.toast-info    { background: #111827; color: var(--orange); border-color: var(--orange); }
-@keyframes slideIn { from { transform: translateX(80px); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+#toast-container { position: fixed; bottom: 24px; right: 16px; display: flex; flex-direction: column-reverse; gap: 8px; z-index: 9999; max-width: min(340px, calc(100vw - 32px)); }
+.toast {
+  position: relative; overflow: hidden;
+  display: flex; align-items: center; gap: 10px;
+  padding: 12px 34px 12px 14px; border-radius: 10px;
+  font-size: 0.82rem; font-weight: 600; line-height: 1.4;
+  background: #14171c; border: 1px solid var(--border); border-left: 3px solid;
+  box-shadow: 0 10px 28px rgba(0,0,0,0.45);
+  opacity: 0; transform: translateX(24px) scale(0.98);
+  transition: opacity 0.25s ease, transform 0.25s ease;
+}
+.toast.show { opacity: 1; transform: translateX(0) scale(1); }
+.toast-icon { flex-shrink: 0; width: 18px; height: 18px; display: flex; align-items: center; justify-content: center; }
+.toast-close { position: absolute; top: 8px; right: 8px; background: transparent; border: none; color: var(--muted); cursor: pointer; font-size: 0.85rem; line-height: 1; padding: 3px; }
+.toast-close:hover { color: var(--text); }
+.toast-bar { position: absolute; left: 0; bottom: 0; height: 2px; background: currentColor; opacity: 0.5; animation: toastShrink linear forwards; }
+@keyframes toastShrink { from { width: 100%; } to { width: 0%; } }
+.toast-success { border-left-color: var(--success); color: var(--success); }
+.toast-error   { border-left-color: var(--red); color: var(--red); }
+.toast-info    { border-left-color: var(--orange); color: var(--orange); }
+.toast span.toast-msg { color: var(--text); font-weight: 600; }
+@media (max-width: 640px) { #toast-container { right: 12px; bottom: 16px; left: 12px; max-width: none; } }
 
 /* MODAL */
 .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.88); display: none; align-items: flex-end; justify-content: center; z-index: 200; }
@@ -3341,6 +3571,8 @@ textarea { resize: vertical; min-height: 76px; }
 </style>
 </head>
 <body>
+
+<div id="page-progress-bar"></div>
 
 <!-- CLAPPERBOARD SPLASH -->
 <div id="splash-screen" style="position:fixed;inset:0;background:#0A0A0A;z-index:9999;display:flex;flex-direction:column;align-items:center;justify-content:center;transition:opacity 0.5s ease;">
@@ -3998,11 +4230,7 @@ textarea { resize: vertical; min-height: 76px; }
   </div>
 </div>
 
-<style>.toast{position:fixed;bottom:20px;left:50%;transform:translateX(-50%) translateY(20px);background:#1a1a1a;border:1px solid var(--border);color:#fff;padding:10px 18px;border-radius:8px;font-size:0.85rem;opacity:0;transition:all 0.3s;z-index:10000;}
-.toast.show{opacity:1;transform:translateX(-50%) translateY(0);}
-.toast-error{border-color:var(--red);color:var(--red);}
-.toast-success{border-color:var(--orange);}
-.tx-status{margin-top:8px;font-size:0.78rem;padding:8px;border-radius:6px;display:none;}
+<style>.tx-status{margin-top:8px;font-size:0.78rem;padding:8px;border-radius:6px;display:none;}
 .tx-info{background:rgba(255,255,255,0.05);color:var(--muted);display:block;}
 .tx-success{background:rgba(255,107,26,0.1);color:var(--orange);display:block;}
 .tx-error{background:rgba(232,53,10,0.1);color:var(--red);display:block;}
@@ -4564,6 +4792,21 @@ textarea { resize: vertical; min-height: 76px; }
 .sub-clipper-name { font-size:0.78rem;font-weight:700;color:var(--text); }
 .sub-time { font-size:0.65rem;color:var(--muted);margin-left:auto; }
 .sub-embed { margin:10px 0 4px; }
+.sub-embed.sub-embed-collapsed { display:none; }
+.sub-verified-badge { display:inline-flex;align-items:center;justify-content:center;width:14px;height:14px;border-radius:50%;background:var(--orange);color:var(--dark);flex-shrink:0; }
+.sub-collapse-btn {
+  display:flex;align-items:center;gap:4px;flex-shrink:0;align-self:flex-start;
+  background:transparent;border:1px solid var(--border);color:var(--muted);
+  font-family:var(--font-body);font-size:0.64rem;font-weight:700;
+  padding:4px 8px;border-radius:20px;cursor:pointer;white-space:nowrap;
+  transition:border-color 0.15s,color 0.15s;
+}
+.sub-collapse-btn:hover { border-color:var(--orange);color:var(--orange); }
+.sub-sort-bar { display:flex;align-items:center;gap:6px;margin:2px 0 12px;flex-wrap:wrap; }
+.sub-sort-label { font-size:0.68rem;color:var(--muted);text-transform:uppercase;letter-spacing:0.06em;margin-right:2px; }
+.sub-sort-btn { background:transparent;border:1px solid var(--border);color:var(--muted);font-family:var(--font-body);font-size:0.72rem;font-weight:700;padding:5px 11px;border-radius:20px;cursor:pointer;transition:all 0.15s; }
+.sub-sort-btn:hover { border-color:rgba(255,107,26,0.4);color:var(--text); }
+.sub-sort-btn.active { background:var(--orange);border-color:var(--orange);color:#000; }
 .clip-embed-tweet {
   min-height:120px;display:flex;align-items:center;justify-content:center;
   background:rgba(255,255,255,0.02);border:1px solid var(--border);
