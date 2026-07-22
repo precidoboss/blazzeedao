@@ -2631,13 +2631,16 @@ async function loadMyStats() {
       claimable += c;
     }
 
-    // Off-chain interaction counts from Supabase
+    // Off-chain interaction count from Supabase
     initSupabase();
-    const [{ count: commentCount }, { data: claimRows }] = await Promise.all([
-      db.from('bounty_comments').select('*', { count: 'exact', head: true }).eq('wallet', wallet),
-      db.from('activity_log').select('detail').eq('actor_wallet', wallet).eq('action_type', 'reward_claimed')
-    ]);
-    const lifetimeEarned = (claimRows || []).reduce((sum, r) => sum + (parseFloat(r.detail?.amount) || 0), 0);
+    const { count: commentCount } = await db.from('bounty_comments').select('*', { count: 'exact', head: true }).eq('wallet', wallet);
+    // NOTE: deliberately not showing a "$BLAZE Earned" total here. It would
+    // have to come from activity_log, which anyone can insert arbitrary rows
+    // into (see supabase_rls.sql for why that table is left anon-writable) —
+    // there's no way to label a number like that "unverified" clearly enough
+    // to stop it looking like real data. If you want a trustworthy version,
+    // it needs to come from the contract's Claimed event log (via
+    // escrow.queryFilter) instead, once we have the event's ABI signature.
 
     grid.innerHTML = `
       <div class="pf-stat-card"><div class="pf-stat-num">${bountiesPosted}</div><div class="pf-stat-label">Bounties Posted</div></div>
@@ -2645,7 +2648,6 @@ async function loadMyStats() {
       <div class="pf-stat-card"><div class="pf-stat-num">${submissionsMade}</div><div class="pf-stat-label">Clips Submitted</div></div>
       <div class="pf-stat-card"><div class="pf-stat-num">${wins}</div><div class="pf-stat-label">Bounties Won</div></div>
       <div class="pf-stat-card"><div class="pf-stat-num">${ethers.formatUnits(claimable, blazeDecimals || 18)}</div><div class="pf-stat-label">Unclaimed $BLAZE</div></div>
-      <div class="pf-stat-card"><div class="pf-stat-num">${lifetimeEarned.toLocaleString()}</div><div class="pf-stat-label">$BLAZE Earned (self-reported, unverified)</div></div>
       <div class="pf-stat-card"><div class="pf-stat-num">${commentCount || 0}</div><div class="pf-stat-label">Comments Posted</div></div>
     `;
   } catch(e) {
