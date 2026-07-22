@@ -105,6 +105,7 @@ module.exports = async (req, res) => {
     // total stream hours, and unique chatters are useful trust signals to
     // show a clipper deciding whether a bounty's streamer is legit.
     let stats = {}, live = {}, vods = [], clips = [], lastStream = null, achievements = {};
+    const callErrors = [];
     if (channelId) {
       const [sR, lR, vR, cR, aR] = await Promise.allSettled([
         blazeGet(`/channels/stats`, token),
