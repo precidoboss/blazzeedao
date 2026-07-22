@@ -52,16 +52,24 @@ async function blazeToken({ code, codeVerifier, redirectUri, wallet }) {
 
   const cleanWallet = wallet ? wallet.toLowerCase() : null;
 
-  const { error: te } = await supabase.from('blaze_oauth_tokens').upsert({
+  // Only include `wallet` in the upsert when we actually have one — Supabase's
+  // upsert only overwrites columns present in the object, so omitting it
+  // entirely (instead of passing wallet: null) preserves whatever link
+  // already exists instead of silently wiping it on a re-auth where the
+  // wallet wasn't passed through correctly.
+  const tokenRow = {
     blaze_user_id:  data.userId,
     blaze_username: username,
     access_token:   data.accessToken,
     refresh_token:  data.refreshToken || null,
-    expires_at:     new Date(Date.now() + 3600 * 1000).toISOString(),
-    wallet:         cleanWallet
-  }, { onConflict: 'blaze_user_id' });
+    expires_at:     new Date(Date.now() + 3600 * 1000).toISOString()
+  };
+  if (cleanWallet) tokenRow.wallet = cleanWallet;
+
+  const { error: te } = await supabase.from('blaze_oauth_tokens').upsert(tokenRow, { onConflict: 'blaze_user_id' });
   if (te) console.error('[token] blaze token upsert error:', te.message);
 
+  let profileErr = null;
   if (cleanWallet) {
     const { error: pe } = await supabase.from('profiles').upsert({
       wallet:        cleanWallet,
@@ -69,10 +77,17 @@ async function blazeToken({ code, codeVerifier, redirectUri, wallet }) {
       blaze_handle:  username,
       blaze_avatar:  avatarUrl
     }, { onConflict: 'wallet' });
-    if (pe) console.error('[token] blaze profile upsert error:', pe.message);
+    if (pe) { profileErr = pe.message; console.error('[token] blaze profile upsert error:', pe.message); }
   }
 
-  return { ...data, username, displayName, avatarUrl };
+  // DIAGNOSTIC: only present when something failed, so a normal response
+  // stays clean — visible directly in the Network tab response, no need
+  // for Vercel log access to see why a link didn't take.
+  const _debug = (te || profileErr || !cleanWallet)
+    ? { tokenUpsertError: te?.message || null, profileUpsertError: profileErr, walletReceived: cleanWallet }
+    : undefined;
+
+  return { ...data, username, displayName, avatarUrl, _debug };
 }
 
 // 1. Exchange the authorization code for an access token (confidential
@@ -120,16 +135,19 @@ async function xToken({ code, codeVerifier, redirectUri, wallet }) {
 
   const cleanWallet = wallet ? wallet.toLowerCase() : null;
 
-  const { error: te } = await supabase.from('x_oauth_tokens').upsert({
+  const tokenRow = {
     x_user_id: xUserId,
     x_username: xUsername,
     access_token: data.access_token,
     refresh_token: data.refresh_token || null,
-    expires_at: new Date(Date.now() + (data.expires_in || 7200) * 1000).toISOString(),
-    wallet: cleanWallet
-  }, { onConflict: 'x_user_id' });
+    expires_at: new Date(Date.now() + (data.expires_in || 7200) * 1000).toISOString()
+  };
+  if (cleanWallet) tokenRow.wallet = cleanWallet;
+
+  const { error: te } = await supabase.from('x_oauth_tokens').upsert(tokenRow, { onConflict: 'x_user_id' });
   if (te) console.error('[token] x token upsert error:', te.message);
 
+  let profileErr = null;
   if (cleanWallet) {
     const { error: pe } = await supabase.from('profiles').upsert({
       wallet: cleanWallet,
@@ -137,11 +155,14 @@ async function xToken({ code, codeVerifier, redirectUri, wallet }) {
       x_handle: xUsername,
       x_verified: true
     }, { onConflict: 'wallet' });
-    if (pe) console.error('[token] x profile upsert error:', pe.message);
+    if (pe) { profileErr = pe.message; console.error('[token] x profile upsert error:', pe.message); }
   }
 
   console.log('[token] x verified @' + xUsername, '->', cleanWallet);
-  return { verified: true, username: xUsername, userId: xUserId };
+  const _debug = (te || profileErr || !cleanWallet)
+    ? { tokenUpsertError: te?.message || null, profileUpsertError: profileErr, walletReceived: cleanWallet }
+    : undefined;
+  return { verified: true, username: xUsername, userId: xUserId, _debug };
 }
 
 module.exports = async (req, res) => {
