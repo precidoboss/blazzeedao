@@ -31,7 +31,12 @@ let WALLETCONNECT_PROJECT_ID = '';
     console.error('Could not load /api/config:', e.message);
   }
 })();
-const REDIRECT_URI = window.location.href.split('?')[0];
+// Blaze (and X) reject the OAuth request outright if this doesn't byte-for-byte
+// match a redirect_uri registered in their app dashboard — trailing slashes
+// count as a mismatch, so strip one if present. www vs non-www, or a Vercel
+// preview URL vs your real domain, are NOT fixable in code — those need to
+// be registered (or redirected to a single canonical domain) on Blaze's side.
+const REDIRECT_URI = window.location.href.split('?')[0].replace(/\/$/, '');
 const X_REDIRECT_URI = REDIRECT_URI + '?provider=x'; // distinct from Blaze's redirect so callbacks can tell them apart
 
 const FUJI_CHAIN_ID = 43113;
@@ -1935,16 +1940,29 @@ async function enrichBountyDetailStreamer(bountyId, wallet, isStreamer) {
     </div>
     ${(info.recentClips && info.recentClips.length) ? `
     <div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--border);">
-      <div style="font-size:0.7rem;font-weight:800;text-transform:uppercase;letter-spacing:0.05em;color:var(--muted);margin-bottom:8px;">🎥 Recent clips from this streamer</div>
+      <div style="font-size:0.7rem;font-weight:800;text-transform:uppercase;letter-spacing:0.05em;color:var(--muted);margin-bottom:8px;">🎥 Recent clips from this streamer <span style="font-weight:400;text-transform:none;color:var(--muted);">— hover to preview</span></div>
       <div style="display:flex;gap:8px;overflow-x:auto;-webkit-overflow-scrolling:touch;padding-bottom:2px;">
         ${info.recentClips.slice(0, 5).map(c => `
-          <a href="${escHtml(safeUrl(c.url))}" target="_blank" rel="noreferrer" style="flex-shrink:0;width:120px;text-decoration:none;color:inherit;">
-            <div style="width:120px;height:68px;border-radius:8px;overflow:hidden;background:rgba(255,107,26,0.08);position:relative;">
-              ${c.thumbnail ? `<img src="${escHtml(c.thumbnail)}" style="width:100%;height:100%;object-fit:cover;" onerror="this.style.display='none'"/>` : `<div style="width:100%;height:100%;display:flex;align-items:center;justify-content:center;font-size:1.1rem;">🎬</div>`}
+          <div style="flex-shrink:0;width:120px;">
+            <div class="clip-tile-media">
+              ${c.videoUrl ? `
+                <video muted loop playsinline preload="none"
+                  ${c.thumbnail ? `poster="${escHtml(c.thumbnail)}"` : ''}
+                  src="${escHtml(safeUrl(c.videoUrl))}"
+                  onmouseenter="this.play().catch(()=>{})"
+                  onmouseleave="this.pause();this.currentTime=0;"
+                  onclick="this.paused ? this.play().catch(()=>{}) : this.pause();"
+                  onerror="this.style.display='none'"></video>
+                <a href="${escHtml(safeUrl(c.url))}" target="_blank" rel="noreferrer" class="clip-tile-open" title="Open on Blaze" onclick="event.stopPropagation()">↗</a>
+              ` : `
+                <a href="${escHtml(safeUrl(c.url))}" target="_blank" rel="noreferrer" style="position:absolute;inset:0;">
+                  ${c.thumbnail ? `<img src="${escHtml(c.thumbnail)}" style="width:100%;height:100%;object-fit:cover;" onerror="this.style.display='none'"/>` : `<div style="width:100%;height:100%;display:flex;align-items:center;justify-content:center;font-size:1.1rem;">🎬</div>`}
+                </a>
+              `}
             </div>
             <div style="font-size:0.66rem;font-weight:600;margin-top:4px;line-height:1.3;overflow:hidden;text-overflow:ellipsis;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;">${escHtml(c.title || 'Untitled clip')}</div>
             ${c.views ? `<div style="font-size:0.6rem;color:var(--muted);margin-top:2px;">👁 ${Number(c.views).toLocaleString()}</div>` : ''}
-          </a>`).join('')}
+          </div>`).join('')}
       </div>
     </div>` : ''}`;
 
@@ -3030,6 +3048,18 @@ textarea { resize: vertical; min-height: 76px; }
 .wallet-tile-badge-muted { color: var(--muted); background: rgba(255,255,255,0.04); border-color: var(--border); }
 .wallet-tile-install { opacity: 0.85; }
 .wallet-tile-install:hover { opacity: 1; }
+
+/* ── CLIP PREVIEW TILES (bounty detail page) ── */
+.clip-tile-media { width: 120px; height: 68px; border-radius: 8px; overflow: hidden; background: rgba(255,107,26,0.08); position: relative; }
+.clip-tile-media video { width: 100%; height: 100%; object-fit: cover; cursor: pointer; display: block; background: #000; }
+.clip-tile-open {
+  position: absolute; top: 4px; right: 4px; width: 20px; height: 20px;
+  border-radius: 6px; background: rgba(0,0,0,0.55); backdrop-filter: blur(2px);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 0.7rem; color: #fff; text-decoration: none; line-height: 1;
+  transition: background 0.15s;
+}
+.clip-tile-open:hover { background: rgba(255,107,26,0.75); }
 .modal-close { position: absolute; top: 14px; right: 14px; background: rgba(255,255,255,0.06); border: none; color: var(--muted); font-size: 1rem; cursor: pointer; width: 30px; height: 30px; border-radius: 50%; display: flex; align-items: center; justify-content: center; }
 .modal-close:hover { color: var(--red); background: rgba(232,53,10,0.1); }
 @media (min-width: 600px) {
