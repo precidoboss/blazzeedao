@@ -1568,6 +1568,7 @@ async function postBounty() {
 // ==================== BOUNTY DETAIL ====================
 let currentBountyId = null;
 let currentBountyStreamer = null; // lowercase wallet of the bounty currently open on the detail page — lets late-arriving Blaze data (clips, live status) know it's safe to redraw
+let currentBountyVodId = null;    // the raw vodId string from the open bounty — checked against recentClips to render a real embed
 
 async function openBountyDetail(bountyId, opts) {
   opts = opts || {};
@@ -1591,6 +1592,7 @@ async function openBountyDetail(bountyId, opts) {
     const claimableAmt = parseFloat(ethers.formatUnits(claimRaw, blazeDecimals));
     const isStreamer    = userAddress && userAddress.toLowerCase() === b.streamer.toLowerCase();
     currentBountyStreamer = b.streamer.toLowerCase();
+    currentBountyVodId = b.vodId || null;
     const isOpen        = Number(b.status) === STATUS_OPEN;
     const isCommunityVote = Number(b.mode) === MODE_COMMUNITY_VOTE;
     const deadlinePassed  = Math.floor(Date.now()/1000) >= Number(b.deadline);
@@ -1622,7 +1624,7 @@ async function openBountyDetail(bountyId, opts) {
             <span class="bd-mode-chip">${isCommunityVote ? '🗳 Community Vote' : '🎯 Streamer Pick'}</span>
           </div>
           <div class="bd-title">${escHtml(b.description)}</div>
-          ${b.vodId ? `<div class="bd-vod-ref">🎬 ${escHtml(b.vodId)}</div>` : ''}
+          ${b.vodId ? `<div class="bd-vod-ref" id="bd-vod-ref-${bountyId}">${blazeClipIdFromText(b.vodId) ? `<a href="${escHtml(safeUrl(b.vodId))}" target="_blank" rel="noreferrer" style="color:inherit;text-decoration:none;">🎬 Watch clip on Blaze ↗</a>` : `🎬 ${escHtml(b.vodId)}`}</div>` : ''}
         </div>
         <div class="bd-reward-hero">
           <img src="${BLAZE_LOGO}" style="width:32px;height:32px;object-fit:contain;" onerror="this.style.display='none'" alt=""/>
@@ -1915,6 +1917,14 @@ async function loadSubmissionFlags(bountyId) {
   } catch(e) { /* silent — flags are a nice-to-have overlay */ }
 }
 
+// Recognizes a Blaze clip URL (or a bare clip UUID) pasted into the
+// "Source Stream / VOD" field, e.g. https://blaze.stream/clips/<uuid>
+function blazeClipIdFromText(text) {
+  if (!text) return null;
+  const m = String(text).match(/(?:blaze\.stream\/clips\/)?([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i);
+  return m ? m[1] : null;
+}
+
 async function enrichBountyDetailStreamer(bountyId, wallet, isStreamer) {
   const el = document.getElementById(`bd-streamer-${bountyId}`);
   if (!el) return;
@@ -1965,6 +1975,29 @@ async function enrichBountyDetailStreamer(bountyId, wallet, isStreamer) {
           </div>`).join('')}
       </div>
     </div>` : ''}`;
+
+  // If this bounty's "Source Stream / VOD" field is a Blaze clip URL and it
+  // matches one of the streamer's recently-fetched clips, upgrade the plain
+  // text reference into a real playable preview using the same video tile
+  // markup as the "recent clips" row above.
+  const vodRefEl = document.getElementById(`bd-vod-ref-${bountyId}`);
+  const clipId = blazeClipIdFromText(currentBountyVodId);
+  if (vodRefEl && clipId && info.recentClips && info.recentClips.length) {
+    const match = info.recentClips.find(c => c.id === clipId);
+    if (match && match.videoUrl) {
+      vodRefEl.outerHTML = `
+        <div class="clip-tile-media" id="bd-vod-ref-${bountyId}" style="width:180px;height:101px;margin-top:6px;">
+          <video muted loop playsinline preload="none"
+            ${match.thumbnail ? `poster="${escHtml(match.thumbnail)}"` : ''}
+            src="${escHtml(safeUrl(match.videoUrl))}"
+            onmouseenter="this.play().catch(()=>{})"
+            onmouseleave="this.pause();this.currentTime=0;"
+            onclick="this.paused ? this.play().catch(()=>{}) : this.pause();"
+            onerror="this.style.display='none'"></video>
+          <a href="${escHtml(safeUrl(match.url || currentBountyVodId))}" target="_blank" rel="noreferrer" class="clip-tile-open" title="Open on Blaze" onclick="event.stopPropagation()">↗</a>
+        </div>`;
+    }
+  }
 
   // Populate the banner behind the title with the streamer's Blaze profile picture
   const bannerEl = document.getElementById(`bd-banner-${bountyId}`);
