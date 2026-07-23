@@ -1056,6 +1056,13 @@ async function loadAnnouncement() {
     if (sessionStorage.getItem('announcement_dismissed') === data.message) return; // already dismissed this exact message
     document.getElementById('announcement-banner-text').textContent = data.message;
     el.style.display = 'flex';
+    // Push the fixed nav + page content down by exactly the banner's real
+    // rendered height (varies with text length/line-wrap), instead of
+    // hardcoding a guessed height that could overlap on smaller screens.
+    requestAnimationFrame(() => {
+      document.documentElement.style.setProperty('--ann-h', el.offsetHeight + 'px');
+      document.body.classList.add('has-announcement');
+    });
   } catch (e) { console.warn('[announcement]', e.message); }
 }
 function dismissAnnouncement() {
@@ -1063,6 +1070,8 @@ function dismissAnnouncement() {
   const text = document.getElementById('announcement-banner-text')?.textContent;
   if (text) sessionStorage.setItem('announcement_dismissed', text);
   if (el) el.style.display = 'none';
+  document.body.classList.remove('has-announcement');
+  document.documentElement.style.setProperty('--ann-h', '0px');
 }
 
 async function loadPlatformStats() {
@@ -3703,8 +3712,12 @@ textarea { resize: vertical; min-height: 76px; }
   font-size: 0.85rem;
   font-weight: 600;
   text-align: center;
-  position: relative;
+  position: fixed;
+  top: 0; left: 0; right: 0;
+  z-index: 101; /* above nav's z-index:100, so it's never covered */
 }
+body.has-announcement nav { top: var(--ann-h, 0px); }
+body.has-announcement .page { padding-top: calc(52px + var(--ann-h, 0px)); }
 .announcement-banner-close {
   position: absolute;
   right: 10px;
