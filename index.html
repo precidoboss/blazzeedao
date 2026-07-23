@@ -568,7 +568,7 @@ function updateNavWallet() {
   const badge = document.getElementById('blaze-connected-badge');
   // Drawer's dashboard-only links only make sense once a wallet is connected
   const dashLabel = document.getElementById('drawer-dash-label');
-  const dashLinks = ['drawer-overview','drawer-bounties-dash','drawer-post','drawer-submissions','drawer-profile'];
+  const dashLinks = ['drawer-overview','drawer-bounties-dash','drawer-post','drawer-submissions','drawer-profile','drawer-swap'];
   if (userAddress) {
     connectBtn.style.display = 'none';
     if (accountMenu) accountMenu.style.display = 'flex';
@@ -3803,6 +3803,7 @@ textarea { resize: vertical; min-height: 76px; }
     <button id="drawer-post" style="display:none;" onclick="drawerGoTab('tab-post','nav-post')">➕ Post a Bounty</button>
     <button id="drawer-submissions" style="display:none;" onclick="drawerGoTab('tab-submissions','nav-submissions')">⚡ Activity</button>
     <button id="drawer-profile" style="display:none;" onclick="drawerGoTab('tab-profile','nav-profile')">👤 My Profile</button>
+    <button id="drawer-swap" style="display:none;" onclick="drawerGoTab('tab-swap','nav-swap')">🔄 Swap</button>
 
     <div class="drawer-section-label">Help</div>
     <button onclick="drawerGo('support')">🛟 Support</button>
