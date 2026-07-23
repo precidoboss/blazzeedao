@@ -468,6 +468,7 @@ async function finishWalletConnect(rawProvider, walletId, opts) {
     if (!opts.silent) toast('Wallet connected');
     loadBounties();
     checkBlazeStatus();
+    if (document.getElementById('page-support')?.classList.contains('active')) updateSupportFormState();
 
     // React to the wallet itself changing accounts/chains/disconnecting —
     // a reload is the simplest way to guarantee every bit of derived state
@@ -546,6 +547,7 @@ function disconnectWallet() {
   lastPostDraftSaved = null;
   updateNavWallet();
   toast('Disconnected');
+  if (document.getElementById('page-support')?.classList.contains('active')) updateSupportFormState();
   if (window.location.pathname.startsWith('/dashboard')) showPage('home');
 }
 
@@ -2033,9 +2035,11 @@ async function submitSupportTicket() {
   const subject = document.getElementById('sup-subject')?.value.trim();
   const category = document.getElementById('sup-category')?.value || 'other';
   const message = document.getElementById('sup-message')?.value.trim();
+  const type = document.querySelector('input[name="sup-type"]:checked')?.value || 'one_time';
 
   if (!subject) { toast('Add a subject', 'error'); return; }
   if (!message || message.length < 5) { toast('Add a bit more detail in your message', 'error'); return; }
+  if (type === 'live_chat' && !userAddress) { toast('Connect your wallet to open a live chat ticket', 'error'); return; }
 
   try {
     initSupabase();
@@ -2045,17 +2049,137 @@ async function submitSupportTicket() {
       subject,
       category,
       message,
-      status: 'open'
+      status: 'open',
+      type
     });
     if (error) throw error;
     setTxStatus('sup-status', '✅ Ticket submitted — thanks for the report!', 'success');
     toast('🛟 Support ticket submitted');
     document.getElementById('sup-subject').value = '';
     document.getElementById('sup-message').value = '';
+    loadMyTickets();
   } catch (e) {
     setTxStatus('sup-status', '❌ Could not submit ticket — try again shortly.', 'error');
     toast('Could not submit ticket', 'error');
   }
+}
+
+// Reflects wallet-connection state onto the support form + My Tickets list.
+// Called on page show and whenever the wallet connects/disconnects.
+function updateSupportFormState() {
+  const radio = document.getElementById('sup-livechat-radio');
+  const label = document.getElementById('sup-livechat-label');
+  const hint = document.getElementById('sup-livechat-hint');
+  if (radio) radio.disabled = !userAddress;
+  if (label) { label.style.cursor = userAddress ? 'pointer' : 'not-allowed'; label.style.opacity = userAddress ? '1' : '0.5'; }
+  if (hint) hint.textContent = userAddress ? '' : '(connect wallet first)';
+  const section = document.getElementById('my-tickets-section');
+  if (section) section.style.display = userAddress ? 'block' : 'none';
+  if (userAddress) loadMyTickets();
+}
+
+// ---- Ticket chat session (mirrors the admin console's login pattern, but
+// open to any wallet — scoped server-side to that wallet's own tickets) ----
+async function getTicketToken() {
+  const cached = sessionStorage.getItem('ticket_token');
+  const expiry = Number(sessionStorage.getItem('ticket_token_expiry') || 0);
+  if (cached && Date.now() < expiry) return cached;
+  if (!signer || !userAddress) throw new Error('Wallet not connected');
+  const timestamp = Date.now();
+  const message = `BlazeDAO wants you to confirm: Support ticket login\nWallet: ${userAddress.toLowerCase()}\nTimestamp: ${timestamp}`;
+  const signature = await signer.signMessage(message);
+  const r = await fetch('/api/tickets?action=auth', {
+    method: 'POST', headers: {'content-type':'application/json'},
+    body: JSON.stringify({ wallet: userAddress, signature, timestamp })
+  });
+  const data = await r.json();
+  if (!r.ok) throw new Error(data.error || 'Could not start ticket session');
+  sessionStorage.setItem('ticket_token', data.token);
+  sessionStorage.setItem('ticket_token_expiry', String(Date.now() + data.expiresInMs - 60000));
+  return data.token;
+}
+async function ticketApi(action, opts = {}) {
+  const token = await getTicketToken();
+  const qs = opts.query ? '&' + new URLSearchParams(opts.query).toString() : '';
+  const r = await fetch(`/api/tickets?action=${action}${qs}`, {
+    method: opts.method || 'GET',
+    headers: { 'content-type':'application/json', 'Authorization': `Bearer ${token}` },
+    body: opts.body ? JSON.stringify(opts.body) : undefined
+  });
+  const data = await r.json();
+  if (!r.ok) throw new Error(data.error || 'Ticket request failed');
+  return data;
+}
+
+const TICKET_STATUS_LABEL = { open: '🟠 Open', replied: '💬 Replied', closed: '⚫ Closed' };
+
+async function loadMyTickets() {
+  const list = document.getElementById('my-tickets-list');
+  if (!list) return;
+  list.innerHTML = '<p class="pb-hint">Loading…</p>';
+  try {
+    const { tickets } = await ticketApi('list');
+    if (!tickets.length) { list.innerHTML = '<p class="pb-hint">No tickets yet.</p>'; return; }
+    list.innerHTML = tickets.map(t => `
+      <div class="docs-card" style="margin-top:8px;cursor:pointer;" onclick="openTicketThread(${t.id}, this)">
+        <div style="display:flex;justify-content:space-between;gap:10px;align-items:start;">
+          <div>
+            <div style="font-weight:700;font-size:0.88rem;">${escHtml(t.subject)}</div>
+            <div style="color:var(--muted);font-size:0.72rem;margin-top:2px;">${t.type === 'live_chat' ? '💬 Live chat' : '📩 One-time'} · ${TICKET_STATUS_LABEL[t.status] || t.status}</div>
+          </div>
+        </div>
+        <div class="ticket-thread" style="display:none;margin-top:10px;"></div>
+      </div>`).join('');
+  } catch (e) {
+    list.innerHTML = `<p class="pb-hint">${escHtml(e.message)}</p>`;
+  }
+}
+
+async function openTicketThread(ticketId, cardEl) {
+  const thread = cardEl.querySelector('.ticket-thread');
+  if (!thread) return;
+  const isOpen = thread.style.display !== 'none';
+  document.querySelectorAll('.ticket-thread').forEach(t => t.style.display = 'none');
+  if (isOpen) return; // was already open, just closed it above
+  thread.style.display = 'block';
+  thread.innerHTML = '<p class="pb-hint">Loading…</p>';
+  try {
+    const { ticket, messages } = await ticketApi('messages', { query: { ticketId } });
+    const msgHtml = messages.length
+      ? messages.map(m => `
+          <div style="text-align:${m.sender === 'admin' ? 'left' : 'right'};margin-bottom:8px;">
+            <div style="display:inline-block;max-width:80%;padding:8px 12px;border-radius:10px;font-size:0.82rem;text-align:left;
+              background:${m.sender === 'admin' ? 'rgba(255,107,26,0.12)' : 'rgba(255,255,255,0.06)'};">
+              <div style="font-size:0.65rem;color:var(--muted);margin-bottom:2px;">${m.sender === 'admin' ? 'BlazeDAO Team' : 'You'}</div>
+              ${escHtml(m.message)}
+            </div>
+          </div>`).join('')
+      : `<p class="pb-hint">${ticket.type === 'live_chat' ? 'No replies yet — hang tight.' : escHtml(ticket.message)}</p>`;
+
+    const canReply = ticket.status !== 'closed' && ticket.type === 'live_chat';
+    thread.innerHTML = `
+      <div style="max-height:260px;overflow-y:auto;padding:8px;background:rgba(0,0,0,0.15);border-radius:8px;margin-bottom:8px;">${msgHtml}</div>
+      ${canReply ? `
+        <div style="display:flex;gap:6px;">
+          <input type="text" id="ticket-reply-${ticketId}" placeholder="Type a message…" style="flex:1;" onclick="event.stopPropagation()" onkeydown="if(event.key==='Enter'){event.stopPropagation();sendTicketReply(${ticketId})}"/>
+          <button class="btn btn-primary btn-sm" onclick="event.stopPropagation();sendTicketReply(${ticketId})">Send</button>
+        </div>` : `<p class="pb-hint" style="margin:0;">${ticket.status === 'closed' ? 'This ticket is closed.' : "One-time tickets don't support replies — open a live chat ticket if you need to go back and forth."}</p>`}
+    `;
+  } catch (e) {
+    thread.innerHTML = `<p class="pb-hint">${escHtml(e.message)}</p>`;
+  }
+}
+
+async function sendTicketReply(ticketId) {
+  const input = document.getElementById(`ticket-reply-${ticketId}`);
+  const message = input?.value.trim();
+  if (!message) return;
+  try {
+    await ticketApi('reply', { method: 'POST', body: { ticketId, message } });
+    input.value = '';
+    document.querySelectorAll('.ticket-thread').forEach(t => { if (t.style.display === 'block') t.style.display = 'none'; });
+    loadMyTickets();
+  } catch (e) { toast(e.message, 'error'); }
 }
 
 async function submitFlag(bountyId, subIndex, cardId) {
@@ -3102,6 +3226,7 @@ function showPage(page, opts) {
   window.scrollTo(0,0);
   if (page === 'dashboard') loadDashboard();
   if (page === 'bounties') loadBounties();
+  if (page === 'support') updateSupportFormState();
   if (!opts.skipUrl) {
     const path = PAGE_PATH[page] || '/';
     history.pushState({ page }, '', path);
@@ -4878,7 +5003,7 @@ body.has-announcement .page { padding-top: calc(52px + var(--ann-h, 0px)); }
 @keyframes shimmer { 0%{background-position:200% 0} 100%{background-position:-200% 0} }
 
 /* ── DOCS PAGE ── */
-.docs-wrap { max-width:860px;margin:0 auto;padding:30px 0 80px; }
+.docs-wrap { max-width:860px;margin:0 auto;padding-top:30px;padding-bottom:80px; }
 .docs-hero { text-align:center;padding:40px 20px;margin-bottom:32px; }
 .docs-hero h1 { font-family:var(--font-display);font-size:clamp(2rem,6vw,3.5rem);background:linear-gradient(135deg,var(--orange),var(--amber));-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;margin-bottom:8px; }
 .docs-testnet-banner { background:rgba(232,53,10,0.1);border:1.5px solid rgba(232,53,10,0.4);border-radius:12px;padding:14px 18px;margin-bottom:28px;display:flex;align-items:flex-start;gap:10px; }
@@ -4972,6 +5097,7 @@ body.has-announcement .page { padding-top: calc(52px + var(--ann-h, 0px)); }
       <a href="#" onclick="event.preventDefault();document.getElementById('doc-contracts').scrollIntoView({behavior:'smooth'})">Smart Contracts</a>
       <a href="#" onclick="event.preventDefault();document.getElementById('doc-testnet').scrollIntoView({behavior:'smooth'})">Testnet Status</a>
       <a href="#" onclick="event.preventDefault();document.getElementById('doc-roadmap').scrollIntoView({behavior:'smooth'})">Roadmap</a>
+      <a href="#" onclick="event.preventDefault();document.getElementById('doc-faq').scrollIntoView({behavior:'smooth'})">FAQ</a>
     </div>
     <div class="docs-testnet-banner" id="doc-testnet">
       <div style="font-size:1.2rem;flex-shrink:0;">&#x26A0;&#xFE0F;</div>
@@ -5048,6 +5174,17 @@ body.has-announcement .page { padding-top: calc(52px + var(--ann-h, 0px)); }
       <div class="docs-card"><h4>Current state</h4><p>BlazeDAO is fully functional on Avalanche Fuji testnet. Real user flows work end-to-end: Blaze OAuth login, bounty creation, clip submission, winner selection, and $BLAZE payout — all on testnet with mock tokens. The Blaze API integration is production-ready.</p></div>
       <div class="docs-card" style="margin-top:10px;"><h4>How Hackathon Funding Gets Us to Mainnet</h4><p>Marketing to bring streamers and clippers onto the platform, server infrastructure and storage costs (Vercel, Supabase, Render), tools and resources for scaling the backend, initial $BLAZE liquidity for the escrow contract, and community growth budget. We are applying to the Blaze Builder Challenge specifically because the prize provides exactly the bridge needed to move from a working testnet product to a live mainnet platform with real $BLAZE rewards for real clippers.</p></div>
     </div>
+    <div class="docs-section" id="doc-faq">
+      <div class="docs-section-title">FAQ</div>
+      <div class="docs-card"><details><summary style="cursor:pointer;font-weight:700;">Is BlazeDAO live on mainnet yet?</summary><p style="margin-top:8px;">Not yet — BlazeDAO currently runs on Avalanche Fuji testnet with a mock $BLAZE token so the full flow (bounties, submissions, payouts) can be tested end-to-end for free. Mainnet launch with real $BLAZE is planned next; see the Roadmap above.</p></details></div>
+      <div class="docs-card"><details><summary style="cursor:pointer;font-weight:700;">How do I get test $BLAZE?</summary><p style="margin-top:8px;">Use the faucet from your dashboard — it mints 10,000 mBLAZE per claim with a 1-hour cooldown between claims.</p></details></div>
+      <div class="docs-card"><details><summary style="cursor:pointer;font-weight:700;">Why do I need to verify my X account?</summary><p style="margin-top:8px;">Only a verified X account can submit clips, and the account posting the clip must exactly match your verified handle. This stops someone from pasting a link to a clip they didn't make and claiming a bounty for it.</p></details></div>
+      <div class="docs-card"><details><summary style="cursor:pointer;font-weight:700;">What happens if I don't win a bounty?</summary><p style="margin-top:8px;">No payout — only the streamer-picked (or community-voted) winner(s) can claim the escrowed $BLAZE. Your submission stays visible on-chain either way.</p></details></div>
+      <div class="docs-card"><details><summary style="cursor:pointer;font-weight:700;">Can a streamer cancel a bounty after posting it?</summary><p style="margin-top:8px;">Yes, within a 1-hour grace period after posting, for a full refund. After that window (or once submissions come in), it runs its course to a winner.</p></details></div>
+      <div class="docs-card"><details><summary style="cursor:pointer;font-weight:700;">How are winners chosen?</summary><p style="margin-top:8px;">Two modes: Streamer Picks (the streamer reviews submissions and selects winners with custom $BLAZE splits) or Community Vote (the contract resolves automatically based on votes once the deadline passes).</p></details></div>
+      <div class="docs-card"><details><summary style="cursor:pointer;font-weight:700;">Something looks wrong with a submission — what do I do?</summary><p style="margin-top:8px;">Flag it from the submission's menu on the bounty page, or open a support ticket from the Support page and our team will take a look.</p></details></div>
+      <div class="docs-card"><details><summary style="cursor:pointer;font-weight:700;">Still have a question?</summary><p style="margin-top:8px;">Open a support ticket from the Support page — choose a live chat ticket if you need back-and-forth, or a one-time ticket for a quick question.</p></details></div>
+    </div>
     <div class="docs-section" id="doc-roadmap">
       <div class="docs-section-title">Roadmap</div>
       <div class="docs-card"><h4>Done</h4><p>Blaze OAuth integration, ERC-20 escrow contract, bounty board, clip submission, streamer pick and community vote, $BLAZE payouts, dashboard with Blaze channel stats and VODs and clips, live status badges, streamer avatars on bounty cards.</p></div>
@@ -5112,6 +5249,17 @@ body.has-announcement .page { padding-top: calc(52px + var(--ann-h, 0px)); }
 
     <div class="docs-card" style="max-width:560px;margin:0 auto;">
       <div class="form-group">
+        <label>Ticket Type</label>
+        <div style="display:flex;gap:10px;">
+          <label style="display:flex;align-items:center;gap:6px;font-size:0.82rem;font-weight:400;cursor:pointer;">
+            <input type="radio" name="sup-type" value="one_time" checked/> One-time question
+          </label>
+          <label id="sup-livechat-label" style="display:flex;align-items:center;gap:6px;font-size:0.82rem;font-weight:400;cursor:not-allowed;opacity:0.5;">
+            <input type="radio" name="sup-type" value="live_chat" id="sup-livechat-radio" disabled/> Live chat <span id="sup-livechat-hint">(connect wallet first)</span>
+          </label>
+        </div>
+      </div>
+      <div class="form-group">
         <label>Subject</label>
         <input type="text" id="sup-subject" placeholder="Short summary — e.g. 'Claim button not working'"/>
       </div>
@@ -5133,6 +5281,11 @@ body.has-announcement .page { padding-top: calc(52px + var(--ann-h, 0px)); }
       <button class="btn btn-primary" style="width:100%;" onclick="submitSupportTicket()">🛟 Submit Ticket</button>
       <div id="sup-status" class="tx-status" style="display:none;"></div>
       <p class="pb-hint" style="margin-top:12px;">Tickets are linked to your wallet address if connected, so we can follow up on account-specific issues faster.</p>
+    </div>
+
+    <div id="my-tickets-section" style="display:none;max-width:560px;margin:24px auto 0;">
+      <div class="docs-section-title" style="font-size:1rem;">My Tickets</div>
+      <div id="my-tickets-list"></div>
     </div>
   </div>
 </div>
