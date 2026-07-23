@@ -2031,11 +2031,19 @@ function toggleFlagBox(cardId) {
 }
 
 // ==================== SUPPORT TICKETS ====================
+let selectedTicketType = 'one_time';
+function selectTicketType(type) {
+  if (type === 'live_chat' && !userAddress) { toast('Connect your wallet to open a live chat ticket', 'error'); return; }
+  selectedTicketType = type;
+  document.getElementById('sup-type-onetime')?.classList.toggle('pb-mode-active', type === 'one_time');
+  document.getElementById('sup-type-livechat')?.classList.toggle('pb-mode-active', type === 'live_chat');
+}
+
 async function submitSupportTicket() {
   const subject = document.getElementById('sup-subject')?.value.trim();
   const category = document.getElementById('sup-category')?.value || 'other';
   const message = document.getElementById('sup-message')?.value.trim();
-  const type = document.querySelector('input[name="sup-type"]:checked')?.value || 'one_time';
+  const type = selectedTicketType;
 
   if (!subject) { toast('Add a subject', 'error'); return; }
   if (!message || message.length < 5) { toast('Add a bit more detail in your message', 'error'); return; }
@@ -2057,6 +2065,7 @@ async function submitSupportTicket() {
     toast('🛟 Support ticket submitted');
     document.getElementById('sup-subject').value = '';
     document.getElementById('sup-message').value = '';
+    selectTicketType('one_time');
     loadMyTickets();
   } catch (e) {
     setTxStatus('sup-status', '❌ Could not submit ticket — try again shortly.', 'error');
@@ -2067,12 +2076,11 @@ async function submitSupportTicket() {
 // Reflects wallet-connection state onto the support form + My Tickets list.
 // Called on page show and whenever the wallet connects/disconnects.
 function updateSupportFormState() {
-  const radio = document.getElementById('sup-livechat-radio');
-  const label = document.getElementById('sup-livechat-label');
+  const livechatCard = document.getElementById('sup-type-livechat');
   const hint = document.getElementById('sup-livechat-hint');
-  if (radio) radio.disabled = !userAddress;
-  if (label) { label.style.cursor = userAddress ? 'pointer' : 'not-allowed'; label.style.opacity = userAddress ? '1' : '0.5'; }
-  if (hint) hint.textContent = userAddress ? '' : '(connect wallet first)';
+  if (livechatCard) { livechatCard.style.opacity = userAddress ? '1' : '0.5'; livechatCard.style.cursor = userAddress ? 'pointer' : 'not-allowed'; }
+  if (hint) hint.style.display = userAddress ? 'none' : 'block';
+  if (!userAddress && selectedTicketType === 'live_chat') selectTicketType('one_time');
   const section = document.getElementById('my-tickets-section');
   if (section) section.style.display = userAddress ? 'block' : 'none';
   if (userAddress) loadMyTickets();
@@ -4040,17 +4048,17 @@ body.has-announcement .page { padding-top: calc(52px + var(--ann-h, 0px)); }
     <div class="dash-tab"        id="nav-swap"           onclick="switchTab('tab-swap',this)">🔄 Swap</div>
   </div>
 
-  <!-- SWAP -->
-  <div id="tab-swap" class="tab-content" style="display:none;">
-    <div class="page-header"><h2>Swap</h2><p>Bridge or swap any coin into $BLAZE.</p></div>
-    <div style="text-align:center;padding:60px 20px;background:var(--panel,rgba(255,255,255,0.02));border:1px solid var(--border);border-radius:14px;">
-      <div style="font-size:2.4rem;margin-bottom:10px;">🔄</div>
-      <div style="font-family:var(--font-display);font-size:1.5rem;letter-spacing:1px;background:linear-gradient(90deg,var(--red),var(--orange));-webkit-background-clip:text;-webkit-text-fill-color:transparent;margin-bottom:8px;">Coming Soon</div>
-      <p style="color:var(--muted);font-size:0.85rem;max-width:420px;margin:0 auto;">BlazeDAO is currently running on Avalanche Fuji testnet. Swapping and bridging any coin into $BLAZE will open here once mainnet launches.</p>
-    </div>
-  </div>
-
   <div class="dash-body container">
+
+    <!-- SWAP -->
+    <div id="tab-swap" class="tab-content" style="display:none;">
+      <div class="page-header"><h2>Swap</h2><p>Bridge or swap any coin into $BLAZE.</p></div>
+      <div style="text-align:center;padding:60px 20px;background:var(--panel,rgba(255,255,255,0.02));border:1px solid var(--border);border-radius:14px;">
+        <div style="font-size:2.4rem;margin-bottom:10px;">🔄</div>
+        <div style="font-family:var(--font-display);font-size:1.5rem;letter-spacing:1px;background:linear-gradient(90deg,var(--red),var(--orange));-webkit-background-clip:text;-webkit-text-fill-color:transparent;margin-bottom:8px;">Coming Soon</div>
+        <p style="color:var(--muted);font-size:0.85rem;max-width:420px;margin:0 auto;">BlazeDAO is currently running on Avalanche Fuji testnet. Swapping and bridging any coin into $BLAZE will open here once mainnet launches.</p>
+      </div>
+    </div>
 
     <!-- OVERVIEW -->
     <div id="tab-overview" class="tab-content" style="display:block;">
@@ -5251,12 +5259,8 @@ body.has-announcement .page { padding-top: calc(52px + var(--ann-h, 0px)); }
       <div class="form-group">
         <label>Ticket Type</label>
         <div style="display:flex;gap:10px;">
-          <label style="display:flex;align-items:center;gap:6px;font-size:0.82rem;font-weight:400;cursor:pointer;">
-            <input type="radio" name="sup-type" value="one_time" checked/> One-time question
-          </label>
-          <label id="sup-livechat-label" style="display:flex;align-items:center;gap:6px;font-size:0.82rem;font-weight:400;cursor:not-allowed;opacity:0.5;">
-            <input type="radio" name="sup-type" value="live_chat" id="sup-livechat-radio" disabled/> Live chat <span id="sup-livechat-hint">(connect wallet first)</span>
-          </label>
+          <div id="sup-type-onetime" class="pb-mode-card pb-mode-active" style="flex:1;padding:10px 12px;text-align:center;font-size:0.82rem;" onclick="selectTicketType('one_time')">One-time question</div>
+          <div id="sup-type-livechat" class="pb-mode-card" style="flex:1;padding:10px 12px;text-align:center;font-size:0.82rem;" onclick="selectTicketType('live_chat')">Live chat<div id="sup-livechat-hint" style="font-size:0.68rem;color:var(--muted);margin-top:2px;">(connect wallet first)</div></div>
         </div>
       </div>
       <div class="form-group">
