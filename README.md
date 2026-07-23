@@ -1,122 +1,86 @@
 # 🔥 BlazeDAO
 
-**The first Blaze-native clipping economy.** Streamers post $BLAZE bounties for clips of their stream, clippers compete to make the best one, and a trustless smart contract escrow handles the payout — no middleman, no chargebacks, no "trust me bro."
+**The first Blaze-native clipping economy.** Streamers post $BLAZE bounties for clips of their stream, clippers compete to make the best one, and a trustless smart contract pays the winner automatically — no middleman, no chargebacks, no "trust me bro."
 
-Built for the Blaze Builder Challenge, live on Avalanche Fuji Testnet.
+🔗 **Live app:** [www.blazedao.com](https://www.blazedao.com)
+📖 **Full docs & FAQ:** available in-app under **Docs**
 
-Created by **precidobos**.
-
----
-
-## What it does
-
-- **Streamers** lock $BLAZE into an on-chain escrow contract and post a bounty: a description, a reward, a deadline, and a mode (they pick the winner themselves, or the community votes).
-- **Clippers** submit clip links against open bounties.
-- **Winners get paid out directly from the smart contract** — reward funds never touch a centralized wallet.
-- Everything around the bounty — comments, requirements, schedule, flags — lives alongside it so streamers and clippers can actually coordinate, not just transact.
+> Currently live on **Avalanche Fuji Testnet** with a mock $BLAZE token, so you can try the entire flow for free before mainnet launches.
 
 ---
 
-## Features
+## What is BlazeDAO?
 
-### Core bounty flow
-- Post a bounty (reward, VOD reference, description, deadline, mode) — funds are locked in the escrow contract via ERC-20 `approve` + `postBounty`
-- Two resolution modes:
-  - **Streamer Pick** — the streamer selects winner(s) and splits the reward
-  - **Community Vote** — clippers vote on submissions; highest-voted clip(s) win automatically once the deadline passes
-- Submit a clip link against any open bounty
-- Claim rewards once a bounty resolves
-- Cancel an unclaimed bounty (streamer only)
+If you stream on [Blaze](https://blaze.stream), you want your best moments clipped and shared. If you clip content, you want to actually get paid for the good ones instead of doing it for free and hoping someone notices.
 
-### Streamer profile (Blaze-linked)
-- Connect wallet (MetaMask / injected provider, auto-switches to Fuji)
-- Link a Blaze account via OAuth — pulls live channel status, follower/subscriber counts, and avatar
-- Set an X (Twitter) handle, which bounties can auto-tag
-
-### Extended bounty details (off-chain, Supabase-backed)
-The on-chain contract only stores the essentials. Everything else a streamer needs to communicate lives in Supabase and renders alongside the on-chain data:
-- **Stream title** — shown on the bounty banner
-- **X account to tag** — pulled automatically from the streamer's saved profile
-- **Special requirements / rules** — either a free-written note, or a structured checklist
-- **Stream schedule** — day, time, and timezone
-- **Number of winners** the streamer plans to pick
-
-### Bounty page extras
-- **Banner images** — each bounty card and detail page pulls the streamer's live Blaze profile picture as its banner
-- **Comments** — an open thread under every bounty so streamers and clippers can talk through details
-- **Share links** — a share button copies a direct link (`?bounty=<id>`) that opens straight to that bounty when visited
-- **Flagging** — clippers (or streamers) can flag a submission with a reason. Flags are only ever visible to that bounty's streamer — enforced server-side, not just hidden in the UI (see [Security notes](#security-notes))
-
-### Dashboard
-- Overview tab with $BLAZE balance, Blaze stats, and quick links
-- My Bounties (posted) and My Submissions (clips you've submitted, unclaimed rewards)
-- Profile tab (Blaze link status, X handle, disconnect)
+BlazeDAO connects the two: streamers lock up $BLAZE as a reward tied to one of their real Blaze streams, clippers submit their best clip, and when a winner is picked, the reward is paid out straight from a smart contract to their wallet — automatically, with no one in between holding the funds.
 
 ---
 
-## Tech stack
+## Getting Started
 
-| Layer | Tech |
+1. **Connect your wallet** — click **Connect Wallet** on the homepage. Any injected wallet (like MetaMask) works. The app will prompt you to switch to Avalanche Fuji Testnet automatically if you're on the wrong network.
+2. **Get test $BLAZE** — head to your **Dashboard → Overview** and use the faucet button. It mints 10,000 mBLAZE per claim, with a 1-hour cooldown between claims.
+3. **Link your Blaze account** — connect your Blaze.stream account so the app can pull your live channel status, avatar, and stats. This is required to post bounties, and it's what shows your identity on bounty pages.
+
+That's the whole setup — everything else depends on whether you're here as a streamer or a clipper (you can be both).
+
+---
+
+## For Streamers — Posting a Bounty
+
+1. From your **Dashboard**, go to **Post** and fill in:
+   - The **$BLAZE reward** you're locking into escrow
+   - Which of your recent **VODs or streams** the bounty is tied to
+   - A **description** and **deadline**
+   - **Requirements** — either free-written notes or a structured checklist of what you want in a submission
+   - Your **stream schedule**, so clippers know when to catch you live
+   - How many **winners** you plan to pick, and whether you'll choose them yourself or let the community vote
+2. Once posted, your $BLAZE is locked in the contract — it can't be touched by anyone until a winner is chosen (or you cancel within the 1-hour grace period for a full refund).
+3. As submissions come in, review them from your bounty's page. You can sort by newest or by a combined ranking score, collapse/expand clip previews, and flag anything that looks off (flags are only ever visible to you).
+4. **Pick your winner(s)** and set how the reward splits between them — or, if you chose Community Vote mode, the contract resolves automatically once the deadline passes based on votes.
+5. Winners claim their $BLAZE directly from the contract — you never have to send a manual payment.
+
+---
+
+## For Clippers — Submitting a Clip
+
+1. **Verify your X (Twitter) account** from **Dashboard → Profile**. This is required before you can submit anything — it proves the clip you're submitting is actually posted from your own account, not copied from someone else's viral post.
+2. Browse open bounties from the **Bounties** page, and check each one's requirements, schedule, and reward before you start clipping.
+3. Watch the stream, cut your clip, and post it to X from your **verified account**.
+4. Submit the X link on the bounty page — it's recorded on-chain immediately.
+5. If the bounty is **Community Vote**, cast your vote on other submissions (one vote per wallet).
+6. If you win, claim your $BLAZE reward straight from the bounty page or your **Dashboard → Activity** tab.
+
+---
+
+## Your Dashboard
+
+| Tab | What it's for |
 |---|---|
-| Frontend | Single-page `index.html` — vanilla JS, no build step, no framework |
-| Chain interaction | [ethers.js](https://docs.ethers.org/) v6, via CDN |
-| Smart contract | Solidity escrow contract, deployed on **Avalanche Fuji Testnet** |
-| Off-chain data | [Supabase](https://supabase.com) (Postgres + PostgREST + RLS) |
-| Auth / integrations | Blaze OAuth (streamer account linking) |
-| Serverless backend | Vercel serverless functions (`/api`) |
+| **Overview** | Your $BLAZE balance, the testnet faucet, and your linked Blaze stats |
+| **Bounties** | Every bounty you've posted or are tracking |
+| **Activity** | Your submissions, votes, and claimable rewards |
+| **Post** | Create a new bounty (streamers) |
+| **Profile** | Your identity — Blaze link, X verification, and wallet |
+| **Swap** | Bridge or swap other coins into $BLAZE — coming soon at mainnet launch |
 
 ---
 
-## Project structure
+## Getting Help
 
-```
-.
-├── index.html                     # entire frontend — pages, styles, and app logic
-├── api/
-│   ├── _supabase.js                # shared Supabase client (service-role key, server-only)
-│   ├── blaze-status.js             # GET  — check if a wallet has a linked Blaze account
-│   ├── disconnect-blaze.js         # POST — unlink a Blaze account from a wallet
-│   ├── link-wallet.js              # POST — link a Blaze account to a wallet
-│   ├── bounty-flags.js             # GET  — streamer-only read of submission flags (on-chain verified)
-│   ├── blaze/
-│   │   └── channel.js               # Blaze channel/live status lookup
-│   └── oauth/
-│       ├── auth-url.js              # builds the Blaze OAuth authorize URL
-│       └── token.js                 # exchanges an OAuth code for tokens
-├── supabase_oauth_pending.sql      # schema: OAuth PKCE session storage
-├── supabase_bounty_features.sql    # schema: bounty_meta, bounty_comments, submission_flags
-├── package.json
-└── vercel.json
-```
+Head to the **Support** page if something's not working or you've got a question:
+
+- **One-time question** — a quick message to the team. You'll get a single reply.
+- **Live chat ticket** *(requires a connected wallet)* — an ongoing back-and-forth thread with the team until your issue is resolved. You can check on it any time from **My Tickets** on the same page.
+
+For anything else — how the platform works, verification rules, the contract, the roadmap — check the **Docs** page in-app, which includes a full FAQ.
 
 ---
 
-## Smart contract
+## A note on where things stand
 
-| | |
-|---|---|
-| Network | Avalanche Fuji Testnet (chain id `43113`) |
-| Escrow contract | `0xc515aaB3b3BBDC2313dc72e1603E0E1ccB419Ee1` |
-| $BLAZE token | `0x57BAEAC484A0F3d5694d81420402FE54D4fBfec7` |
-
-Core contract functions the frontend calls:
-- `postBounty(reward, vodId, description, mode, deadline)`
-- `submitClip(bountyId, clipLink)`
-- `voteSubmission(bountyId, submissionIndex)` (community vote mode)
-- `pickWinners(bountyId, indexes[], amounts[])` (streamer pick mode)
-- `resolveCommunityVote(bountyId)`
-- `claimReward(bountyId)`
-- `cancelBounty(bountyId)`
-- `getBounty(bountyId)`, `getSubmissions(bountyId)`, `getClaimable(wallet, bountyId)`, `bountyCount()`
-
-## Roadmap
-- [ ] Mainnet deployment
-
----
-
-## License
-
-No license file is currently included — all rights reserved by the author unless a license is added.
+BlazeDAO is fully functional end-to-end on testnet right now — wallet connection, Blaze account linking, bounty creation, submissions, voting, and payouts all work with real user flows, just with mock $BLAZE instead of the real thing. Mainnet, with real $BLAZE rewards, is next. Check the **Docs → Roadmap** section in-app for the current status.
 
 ---
 
