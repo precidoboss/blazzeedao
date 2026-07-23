@@ -1,0 +1,243 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<meta name="robots" content="noindex, nofollow"/>
+<title>404</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/ethers/6.7.0/ethers.umd.min.js"></script>
+<style>
+  :root { --bg:#0A0A0A; --panel:#141414; --border:#2a2a2a; --text:#eee; --muted:#888; --orange:#FF6B1A; --red:#E8350A; --green:#22D47A; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif; }
+  #gate { min-height:100vh; display:flex; align-items:center; justify-content:center; flex-direction:column; gap:16px; padding:20px; text-align:center; }
+  #gate button { background:var(--orange); color:#000; border:none; padding:12px 22px; border-radius:8px; font-weight:700; cursor:pointer; font-size:0.9rem; }
+  #gate button:disabled { opacity:0.5; cursor:not-allowed; }
+  #gate p { color:var(--muted); font-size:0.85rem; max-width:340px; }
+  #app { display:none; }
+  header { display:flex; align-items:center; justify-content:space-between; padding:14px 20px; border-bottom:1px solid var(--border); }
+  header h1 { font-size:1rem; margin:0; }
+  header button { background:transparent; border:1px solid var(--border); color:var(--muted); padding:6px 12px; border-radius:6px; cursor:pointer; font-size:0.78rem; }
+  nav.tabs { display:flex; gap:4px; padding:10px 20px; border-bottom:1px solid var(--border); overflow-x:auto; }
+  nav.tabs button { background:transparent; border:none; color:var(--muted); padding:8px 14px; border-radius:6px; cursor:pointer; font-size:0.82rem; font-weight:600; white-space:nowrap; }
+  nav.tabs button.active { background:rgba(255,107,26,0.12); color:var(--orange); }
+  main { padding:20px; max-width:1000px; margin:0 auto; }
+  .cards { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:12px; margin-bottom:20px; }
+  .card { background:var(--panel); border:1px solid var(--border); border-radius:10px; padding:14px; }
+  .card .num { font-size:1.6rem; font-weight:800; }
+  .card .lbl { font-size:0.72rem; color:var(--muted); text-transform:uppercase; letter-spacing:0.04em; }
+  table { width:100%; border-collapse:collapse; font-size:0.8rem; }
+  th, td { text-align:left; padding:8px 10px; border-bottom:1px solid var(--border); vertical-align:top; }
+  th { color:var(--muted); font-size:0.7rem; text-transform:uppercase; }
+  tr:hover td { background:rgba(255,255,255,0.02); }
+  .pill { display:inline-block; padding:2px 8px; border-radius:20px; font-size:0.68rem; font-weight:700; }
+  .pill-open { background:rgba(255,107,26,0.15); color:var(--orange); }
+  .pill-resolved { background:rgba(34,212,122,0.15); color:var(--green); }
+  .btn-sm { background:transparent; border:1px solid var(--border); color:var(--text); padding:4px 10px; border-radius:6px; cursor:pointer; font-size:0.72rem; }
+  .btn-sm:hover { border-color:var(--orange); color:var(--orange); }
+  textarea, input[type=text] { width:100%; background:#0d0d0d; border:1px solid var(--border); color:var(--text); border-radius:6px; padding:8px; font-family:inherit; font-size:0.85rem; }
+  .row { display:flex; gap:10px; align-items:center; margin-bottom:10px; flex-wrap:wrap; }
+  .save-btn { background:var(--orange); color:#000; border:none; padding:8px 16px; border-radius:6px; font-weight:700; cursor:pointer; }
+  .empty { color:var(--muted); font-size:0.82rem; padding:20px; text-align:center; }
+  .toast { position:fixed; bottom:20px; right:20px; background:var(--panel); border:1px solid var(--border); padding:10px 16px; border-radius:8px; font-size:0.82rem; z-index:99; }
+</style>
+</head>
+<body>
+
+<div id="gate">
+  <div style="font-size:1.1rem;font-weight:700;">Console</div>
+  <p>Connect the admin wallet to continue.</p>
+  <button id="gate-btn" onclick="gateConnect()">Connect Wallet</button>
+  <p id="gate-msg" style="color:var(--red);"></p>
+</div>
+
+<div id="app">
+  <header>
+    <h1>🎛 BlazeDAO Console</h1>
+    <button onclick="logout()">Sign out</button>
+  </header>
+  <nav class="tabs">
+    <button class="active" data-tab="overview" onclick="showTab('overview')">Overview</button>
+    <button data-tab="announcement" onclick="showTab('announcement')">Announcement</button>
+    <button data-tab="flags" onclick="showTab('flags')">Flags</button>
+    <button data-tab="tickets" onclick="showTab('tickets')">Support Tickets</button>
+    <button data-tab="logs" onclick="showTab('logs')">Error Logs</button>
+  </nav>
+  <main id="main"></main>
+</div>
+
+<script>
+let TOKEN = sessionStorage.getItem('console_token') || '';
+let provider, signer, wallet;
+
+async function gateConnect() {
+  const btn = document.getElementById('gate-btn');
+  const msg = document.getElementById('gate-msg');
+  msg.textContent = '';
+  if (!window.ethereum) { msg.textContent = 'No wallet extension found.'; return; }
+  btn.disabled = true;
+  try {
+    provider = new ethers.BrowserProvider(window.ethereum);
+    await provider.send('eth_requestAccounts', []);
+    signer = await provider.getSigner();
+    wallet = (await signer.getAddress()).toLowerCase();
+
+    const timestamp = Date.now();
+    const message = `BlazeDAO wants you to confirm: Admin login\nWallet: ${wallet}\nTimestamp: ${timestamp}`;
+    const signature = await signer.signMessage(message);
+
+    const r = await fetch('/api/admin?action=auth', {
+      method: 'POST', headers: {'content-type':'application/json'},
+      body: JSON.stringify({ wallet, signature, timestamp })
+    });
+    const data = await r.json();
+    if (!r.ok) { msg.textContent = data.error || 'Not authorized'; btn.disabled = false; return; }
+    TOKEN = data.token;
+    sessionStorage.setItem('console_token', TOKEN);
+    enterApp();
+  } catch (e) {
+    msg.textContent = e.message || 'Connection failed';
+    btn.disabled = false;
+  }
+}
+
+function logout() {
+  sessionStorage.removeItem('console_token');
+  TOKEN = '';
+  document.getElementById('app').style.display = 'none';
+  document.getElementById('gate').style.display = 'flex';
+}
+
+async function api(action, opts = {}) {
+  const r = await fetch(`/api/admin?action=${action}`, {
+    method: opts.method || 'GET',
+    headers: { 'content-type':'application/json', 'Authorization': `Bearer ${TOKEN}` },
+    body: opts.body ? JSON.stringify(opts.body) : undefined
+  });
+  const data = await r.json();
+  if (r.status === 401) { logout(); throw new Error('Session expired'); }
+  if (!r.ok) throw new Error(data.error || 'Request failed');
+  return data;
+}
+
+function toast(msg) {
+  const t = document.createElement('div');
+  t.className = 'toast'; t.textContent = msg;
+  document.body.appendChild(t);
+  setTimeout(() => t.remove(), 2500);
+}
+
+function esc(s) { return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+function timeAgo(iso) {
+  const s = Math.floor((Date.now() - new Date(iso).getTime())/1000);
+  if (s < 60) return s+'s ago';
+  if (s < 3600) return Math.floor(s/60)+'m ago';
+  if (s < 86400) return Math.floor(s/3600)+'h ago';
+  return Math.floor(s/86400)+'d ago';
+}
+
+async function enterApp() {
+  document.getElementById('gate').style.display = 'none';
+  document.getElementById('app').style.display = 'block';
+  showTab('overview');
+}
+
+function showTab(tab) {
+  document.querySelectorAll('nav.tabs button').forEach(b => b.classList.toggle('active', b.dataset.tab === tab));
+  const main = document.getElementById('main');
+  main.innerHTML = '<div class="empty">Loading…</div>';
+  ({ overview: renderOverview, announcement: renderAnnouncement, flags: renderFlags, tickets: renderTickets, logs: renderLogs })[tab]();
+}
+
+async function renderOverview() {
+  try {
+    const d = await api('overview');
+    document.getElementById('main').innerHTML = `
+      <div class="cards">
+        <div class="card"><div class="num">${d.openFlags}</div><div class="lbl">Open Flags</div></div>
+        <div class="card"><div class="num">${d.openTickets}</div><div class="lbl">Open Tickets</div></div>
+        <div class="card"><div class="num">${d.errorsLast24h}</div><div class="lbl">Errors (24h)</div></div>
+        <div class="card"><div class="num">${d.announcement?.is_open ? 'LIVE' : 'OFF'}</div><div class="lbl">Announcement</div></div>
+      </div>`;
+  } catch (e) { document.getElementById('main').innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
+}
+
+async function renderAnnouncement() {
+  try {
+    const d = await api('announcement');
+    const a = d.announcement || { is_open: false, message: '' };
+    document.getElementById('main').innerHTML = `
+      <div class="row"><label style="font-size:0.85rem;"><input type="checkbox" id="ann-open" ${a.is_open?'checked':''}/> Banner is live</label></div>
+      <textarea id="ann-msg" rows="3" placeholder="Announcement text…">${esc(a.message)}</textarea>
+      <div class="row" style="margin-top:10px;"><button class="save-btn" onclick="saveAnnouncement()">Save</button></div>`;
+  } catch (e) { document.getElementById('main').innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
+}
+async function saveAnnouncement() {
+  try {
+    await api('announcement', { method:'POST', body: { is_open: document.getElementById('ann-open').checked, message: document.getElementById('ann-msg').value } });
+    toast('Saved');
+  } catch (e) { toast(e.message); }
+}
+
+async function renderFlags() {
+  try {
+    const d = await api('flags');
+    const rows = (d.flags || []).map(f => `
+      <tr>
+        <td>#${f.bounty_id} · sub ${f.submission_index}</td>
+        <td>${esc(f.reason)}</td>
+        <td>${f.flagged_by.slice(0,6)}…${f.flagged_by.slice(-4)}</td>
+        <td>${timeAgo(f.created_at)}</td>
+        <td><span class="pill ${f.resolved?'pill-resolved':'pill-open'}">${f.resolved?'Resolved':'Open'}</span></td>
+        <td><button class="btn-sm" onclick="toggleFlag(${f.id}, ${!f.resolved})">${f.resolved?'Reopen':'Resolve'}</button></td>
+      </tr>`).join('');
+    document.getElementById('main').innerHTML = rows
+      ? `<table><thead><tr><th>Bounty</th><th>Reason</th><th>Flagged by</th><th>When</th><th>Status</th><th></th></tr></thead><tbody>${rows}</tbody></table>`
+      : `<div class="empty">No flags yet.</div>`;
+  } catch (e) { document.getElementById('main').innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
+}
+async function toggleFlag(id, resolved) {
+  try { await api('resolve-flag', { method:'POST', body:{ id, resolved } }); renderFlags(); } catch (e) { toast(e.message); }
+}
+
+async function renderTickets() {
+  try {
+    const d = await api('tickets');
+    const rows = (d.tickets || []).map(t => `
+      <tr>
+        <td>${esc(t.subject)}<div style="color:var(--muted);font-size:0.72rem;margin-top:2px;">${esc(t.category)} · ${t.wallet ? t.wallet.slice(0,6)+'…'+t.wallet.slice(-4) : 'anon'}</div></td>
+        <td style="max-width:280px;">${esc(t.message)}</td>
+        <td>${timeAgo(t.created_at)}</td>
+        <td><span class="pill ${t.status==='open'?'pill-open':'pill-resolved'}">${esc(t.status)}</span></td>
+        <td><button class="btn-sm" onclick="toggleTicket(${t.id}, '${t.status==='open'?'resolved':'open'}')">${t.status==='open'?'Resolve':'Reopen'}</button></td>
+      </tr>`).join('');
+    document.getElementById('main').innerHTML = rows
+      ? `<table><thead><tr><th>Subject</th><th>Message</th><th>When</th><th>Status</th><th></th></tr></thead><tbody>${rows}</tbody></table>`
+      : `<div class="empty">No tickets yet.</div>`;
+  } catch (e) { document.getElementById('main').innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
+}
+async function toggleTicket(id, status) {
+  try { await api('resolve-ticket', { method:'POST', body:{ id, status } }); renderTickets(); } catch (e) { toast(e.message); }
+}
+
+async function renderLogs() {
+  try {
+    const d = await api('logs');
+    const rows = (d.logs || []).map(l => `
+      <tr>
+        <td style="max-width:320px;">${esc(l.message)}${l.stack ? `<details style="margin-top:4px;"><summary style="cursor:pointer;color:var(--muted);font-size:0.7rem;">stack</summary><pre style="white-space:pre-wrap;font-size:0.68rem;color:var(--muted);">${esc(l.stack)}</pre></details>` : ''}</td>
+        <td style="max-width:200px;word-break:break-all;">${esc(l.url)}</td>
+        <td>${l.wallet ? l.wallet.slice(0,6)+'…'+l.wallet.slice(-4) : '—'}</td>
+        <td>${timeAgo(l.created_at)}</td>
+      </tr>`).join('');
+    document.getElementById('main').innerHTML = rows
+      ? `<table><thead><tr><th>Message</th><th>Page</th><th>Wallet</th><th>When</th></tr></thead><tbody>${rows}</tbody></table>`
+      : `<div class="empty">No errors logged. 🎉</div>`;
+  } catch (e) { document.getElementById('main').innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
+}
+
+// If we already have a session token, skip the gate.
+if (TOKEN) { document.getElementById('gate').innerHTML = '<p>Checking session…</p>'; enterApp().catch(()=>logout()); }
+</script>
+</body>
+</html>
