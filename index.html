@@ -42,11 +42,11 @@ let WALLETCONNECT_PROJECT_ID = '';
   }
 })();
 // Blaze (and X) reject the OAuth request outright if this doesn't byte-for-byte
-// match a redirect_uri registered in their app dashboard — trailing slashes
-// count as a mismatch, so strip one if present. www vs non-www, or a Vercel
-// preview URL vs your real domain, are NOT fixable in code — those need to
-// be registered (or redirected to a single canonical domain) on Blaze's side.
-const REDIRECT_URI = window.location.href.split('?')[0].replace(/\/$/, '');
+// match a redirect_uri registered in their app dashboard. Registered URIs are
+// root-level only (e.g. https://www.blazedao.com/) — using the current deep
+// path (e.g. /bounties/42) here caused "invalid redirect_uri" errors whenever
+// someone clicked Connect from anywhere but the homepage. Always use the root.
+const REDIRECT_URI = window.location.origin + '/';
 const X_REDIRECT_URI = REDIRECT_URI + '?provider=x'; // distinct from Blaze's redirect so callbacks can tell them apart
 
 const FUJI_CHAIN_ID = 43113;
@@ -98,6 +98,36 @@ const STATUS_OPEN = 0, STATUS_RESOLVED = 1, STATUS_CANCELLED = 2;
 // ==================== STATE ====================
 let db = null;
 let provider = null, signer = null, userAddress = null;
+
+// ==================== ERROR REPORTING ====================
+// Any uncaught error or rejected promise gets quietly logged to the admin
+// console (Error Logs tab) so real problems surface even when nobody files
+// a support ticket. Never throws, never shows anything to the user, and
+// de-dupes identical messages within a session so one broken loop doesn't
+// spam the table.
+const _reportedErrors = new Set();
+function reportError(message, stack, extra) {
+  try {
+    const key = String(message).slice(0, 200);
+    if (_reportedErrors.has(key)) return;
+    _reportedErrors.add(key);
+    fetch('/api/admin?action=log', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        message: String(message).slice(0, 2000),
+        stack: stack ? String(stack).slice(0, 4000) : null,
+        url: window.location.href,
+        wallet: typeof userAddress !== 'undefined' ? userAddress : null,
+        userAgent: navigator.userAgent
+      })
+    }).catch(() => {}); // never let logging itself break anything
+  } catch (e) { /* swallow — logging must never throw */ }
+}
+window.addEventListener('error', (e) => reportError(e.message, e.error?.stack));
+window.addEventListener('unhandledrejection', (e) => reportError(
+  e.reason?.message || String(e.reason), e.reason?.stack
+));
 let escrow = null, escrowRead = null, blaze = null, blazeRead = null;
 let blazeDecimals = 18;
 let prevPage = 'home';
@@ -603,6 +633,8 @@ document.addEventListener('click', e => {
 function connectBlaze() {
   if (!userAddress) { toast('Connect your wallet first', 'error'); return; }
   sessionStorage.setItem('clipdao_wallet', userAddress);
+  const here = window.location.pathname + window.location.search;
+  if (here && here !== '/') sessionStorage.setItem('oauth_return_path', here);
   fetch('/api/oauth/auth-url', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
@@ -615,10 +647,10 @@ function connectBlaze() {
       sessionStorage.setItem('blaze_verifier', data.codeVerifier);
       window.location.href = data.url;
     } else {
-      toast('Blaze OAuth error: ' + JSON.stringify(data), 'error');
+      toast(data.error || 'Could not start Blaze sign-in — please try again in a moment', 'error');
     }
   })
-  .catch(e => toast('Blaze connect failed: ' + e.message, 'error'));
+  .catch(() => toast('Could not reach the server to start Blaze sign-in — check your connection and try again', 'error'));
 }
 
 let blazeStatusSeq = 0;
@@ -784,6 +816,8 @@ async function disconnectBlaze() {
 function connectX() {
   if (!userAddress) { toast('Connect your wallet first', 'error'); return; }
   sessionStorage.setItem('clipdao_wallet_x', userAddress);
+  const here = window.location.pathname + window.location.search;
+  if (here && here !== '/') sessionStorage.setItem('oauth_return_path', here);
   fetch('/api/oauth/auth-url', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
@@ -796,10 +830,10 @@ function connectX() {
       sessionStorage.setItem('x_verifier', data.codeVerifier);
       window.location.href = data.url;
     } else {
-      toast('X connect error: ' + (data.error || JSON.stringify(data)), 'error');
+      toast(data.error || 'Could not start X sign-in — please try again in a moment', 'error');
     }
   })
-  .catch(e => toast('X connect failed: ' + e.message, 'error'));
+  .catch(() => toast('Could not reach the server to start X sign-in — check your connection and try again', 'error'));
 }
 
 // Handles the ?provider=x&code= redirect back from X after user approves
@@ -889,11 +923,18 @@ async function disconnectX() {
 // Dispatches the ?code= redirect to whichever provider it belongs to —
 // both Blaze and X return to the same page shape, so /?provider=x is the
 // only thing that tells them apart.
-function handleOAuthCallbacks() {
+async function handleOAuthCallbacks() {
   const params = new URLSearchParams(window.location.search);
   if (!params.get('code')) return;
-  if (params.get('provider') === 'x') handleXCallback();
-  else handleBlazeCallback();
+  if (params.get('provider') === 'x') await handleXCallback();
+  else await handleBlazeCallback();
+
+  const returnPath = sessionStorage.getItem('oauth_return_path');
+  if (returnPath) {
+    sessionStorage.removeItem('oauth_return_path');
+    history.replaceState({}, '', returnPath);
+    routeFromLocation();
+  }
 }
 
 async function refreshBlazeBalance() {
@@ -1001,6 +1042,29 @@ async function loadProfile() {
 }
 
 // ==================== PLATFORM STATS ====================
+// Site-wide announcement banner — controlled entirely from Supabase (see
+// supabase_announcement.sql). Toggle `is_open` and edit `message` directly
+// in the Table Editor; no app deploy needed. Dismissing hides it for the
+// rest of this browser session only — it reappears next visit if still open.
+async function loadAnnouncement() {
+  try {
+    initSupabase();
+    if (!db) return;
+    const { data } = await db.from('site_announcement').select('is_open, message').eq('id', 1).maybeSingle();
+    const el = document.getElementById('announcement-banner');
+    if (!el || !data?.is_open || !data.message) return;
+    if (sessionStorage.getItem('announcement_dismissed') === data.message) return; // already dismissed this exact message
+    document.getElementById('announcement-banner-text').textContent = data.message;
+    el.style.display = 'flex';
+  } catch (e) { console.warn('[announcement]', e.message); }
+}
+function dismissAnnouncement() {
+  const el = document.getElementById('announcement-banner');
+  const text = document.getElementById('announcement-banner-text')?.textContent;
+  if (text) sessionStorage.setItem('announcement_dismissed', text);
+  if (el) el.style.display = 'none';
+}
+
 async function loadPlatformStats() {
   try {
     const reader = escrowRead || new ethers.Contract(ESCROW_ADDRESS, ESCROW_ABI, new ethers.JsonRpcProvider(FUJI_RPC));
@@ -3017,9 +3081,9 @@ function filterMySubmissions(filter, btn) {
 // ==================== NAVIGATION / ROUTING ====================
 // Every page (and dashboard tab) gets a real URL so refreshing keeps you there.
 const PAGE_PATH = { 'home':'/', 'bounties':'/bounties', 'docs':'/docs', 'how-to-earn':'/how-to-earn', 'support':'/support', 'dashboard':'/dashboard' };
-const TAB_PATH = { 'tab-overview':'/dashboard', 'tab-bounties-dash':'/dashboard/bounties', 'tab-post':'/dashboard/post', 'tab-submissions':'/dashboard/activity', 'tab-profile':'/dashboard/profile' };
+const TAB_PATH = { 'tab-overview':'/dashboard', 'tab-bounties-dash':'/dashboard/bounties', 'tab-post':'/dashboard/post', 'tab-submissions':'/dashboard/activity', 'tab-profile':'/dashboard/profile', 'tab-swap':'/dashboard/swap' };
 const TAB_FROM_PATH = { '/dashboard':'tab-overview', '/dashboard/bounties':'tab-bounties-dash', '/dashboard/post':'tab-post', '/dashboard/activity':'tab-submissions', '/dashboard/profile':'tab-profile' };
-const NAV_ID_FOR_TAB = { 'tab-overview':'nav-overview','tab-bounties-dash':'nav-bounties-dash','tab-submissions':'nav-submissions','tab-post':'nav-post','tab-profile':'nav-profile' };
+const NAV_ID_FOR_TAB = { 'tab-overview':'nav-overview','tab-bounties-dash':'nav-bounties-dash','tab-submissions':'nav-submissions','tab-post':'nav-post','tab-profile':'nav-profile','tab-swap':'nav-swap' };
 
 function showPage(page, opts) {
   opts = opts || {};
@@ -3095,6 +3159,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   initSupabase();
   loadBounties();
   loadPlatformStats();
+  loadAnnouncement();
   await connectWallet({ silent: true }); // reconnect without a fresh prompt if already authorized
   handleOAuthCallbacks();
   routeFromLocation();
@@ -3626,7 +3691,45 @@ textarea { resize: vertical; min-height: 76px; }
   100% { transform: rotate(0deg); }
 }
 #clapper-arm { animation: clapperClap 1.1s ease-in-out 1 forwards; }
+.announcement-banner {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 8px 40px 8px 16px;
+  background: linear-gradient(90deg, var(--red), var(--orange));
+  color: #fff;
+  font-family: var(--font-body);
+  font-size: 0.85rem;
+  font-weight: 600;
+  text-align: center;
+  position: relative;
+}
+.announcement-banner-close {
+  position: absolute;
+  right: 10px;
+  top: 50%;
+  transform: translateY(-50%);
+  background: rgba(0,0,0,0.15);
+  border: none;
+  color: #fff;
+  width: 22px;
+  height: 22px;
+  border-radius: var(--radius-pill);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.announcement-banner-close:hover { background: rgba(0,0,0,0.3); }
 </style>
+<div id="announcement-banner" class="announcement-banner">
+  <span id="announcement-banner-text"></span>
+  <button class="announcement-banner-close" onclick="dismissAnnouncement()" aria-label="Dismiss announcement">
+    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
+  </button>
+</div>
 <nav>
   <div class="nav-left">
     <button class="hamburger-btn" id="hamburger-btn" onclick="toggleDrawer()" aria-label="Menu" title="Menu">
@@ -3795,6 +3898,17 @@ textarea { resize: vertical; min-height: 76px; }
     <div class="dash-tab"        id="nav-submissions"    onclick="switchTab('tab-submissions',this)">⚡ Activity</div>
     <div class="dash-tab"        id="nav-post"           onclick="switchTab('tab-post',this)">➕ Post</div>
     <div class="dash-tab"        id="nav-profile"        onclick="switchTab('tab-profile',this)">👤 Profile</div>
+    <div class="dash-tab"        id="nav-swap"           onclick="switchTab('tab-swap',this)">🔄 Swap</div>
+  </div>
+
+  <!-- SWAP -->
+  <div id="tab-swap" class="tab-content" style="display:none;">
+    <div class="page-header"><h2>Swap</h2><p>Bridge or swap any coin into $BLAZE.</p></div>
+    <div style="text-align:center;padding:60px 20px;background:var(--panel,rgba(255,255,255,0.02));border:1px solid var(--border);border-radius:14px;">
+      <div style="font-size:2.4rem;margin-bottom:10px;">🔄</div>
+      <div style="font-family:var(--font-display);font-size:1.5rem;letter-spacing:1px;background:linear-gradient(90deg,var(--red),var(--orange));-webkit-background-clip:text;-webkit-text-fill-color:transparent;margin-bottom:8px;">Coming Soon</div>
+      <p style="color:var(--muted);font-size:0.85rem;max-width:420px;margin:0 auto;">BlazeDAO is currently running on Avalanche Fuji testnet. Swapping and bridging any coin into $BLAZE will open here once mainnet launches.</p>
+    </div>
   </div>
 
   <div class="dash-body container">
