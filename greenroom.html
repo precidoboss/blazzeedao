@@ -204,20 +204,80 @@ async function renderTickets() {
   try {
     const d = await api('tickets');
     const rows = (d.tickets || []).map(t => `
-      <tr>
-        <td>${esc(t.subject)}<div style="color:var(--muted);font-size:0.72rem;margin-top:2px;">${esc(t.category)} · ${t.wallet ? t.wallet.slice(0,6)+'…'+t.wallet.slice(-4) : 'anon'}</div></td>
+      <tr style="cursor:pointer;" onclick="openAdminTicketThread(${t.id}, this)">
+        <td>${esc(t.subject)}<div style="color:var(--muted);font-size:0.72rem;margin-top:2px;">${esc(t.category)} · ${t.type==='live_chat'?'💬 Live chat':'📩 One-time'} · ${t.wallet ? t.wallet.slice(0,6)+'…'+t.wallet.slice(-4) : 'anon'}</div></td>
         <td style="max-width:280px;">${esc(t.message)}</td>
         <td>${timeAgo(t.created_at)}</td>
-        <td><span class="pill ${t.status==='open'?'pill-open':'pill-resolved'}">${esc(t.status)}</span></td>
-        <td><button class="btn-sm" onclick="toggleTicket(${t.id}, '${t.status==='open'?'resolved':'open'}')">${t.status==='open'?'Resolve':'Reopen'}</button></td>
-      </tr>`).join('');
+        <td><span class="pill ${t.status==='closed'?'pill-resolved':'pill-open'}">${esc(t.status)}</span></td>
+      </tr>
+      <tr id="admin-ticket-thread-${t.id}" style="display:none;"><td colspan="4" style="background:rgba(0,0,0,0.15);"></td></tr>`).join('');
     document.getElementById('main').innerHTML = rows
-      ? `<table><thead><tr><th>Subject</th><th>Message</th><th>When</th><th>Status</th><th></th></tr></thead><tbody>${rows}</tbody></table>`
+      ? `<table><thead><tr><th>Subject</th><th>Message</th><th>When</th><th>Status</th></tr></thead><tbody>${rows}</tbody></table>`
       : `<div class="empty">No tickets yet.</div>`;
   } catch (e) { document.getElementById('main').innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
 }
-async function toggleTicket(id, status) {
-  try { await api('resolve-ticket', { method:'POST', body:{ id, status } }); renderTickets(); } catch (e) { toast(e.message); }
+
+// Admin ticket chat — calls api/tickets.js directly with the same admin
+// session TOKEN (it's the same signed-token scheme as api/admin.js; the
+// wallet inside it matches ADMIN_WALLET so the server grants access to
+// every ticket, not just ones belonging to that wallet).
+async function ticketsApi(action, opts = {}) {
+  const qs = opts.query ? '&' + new URLSearchParams(opts.query).toString() : '';
+  const r = await fetch(`/api/tickets?action=${action}${qs}`, {
+    method: opts.method || 'GET',
+    headers: { 'content-type':'application/json', 'Authorization': `Bearer ${TOKEN}` },
+    body: opts.body ? JSON.stringify(opts.body) : undefined
+  });
+  const data = await r.json();
+  if (!r.ok) throw new Error(data.error || 'Request failed');
+  return data;
+}
+
+async function openAdminTicketThread(id, rowEl) {
+  const cell = document.getElementById(`admin-ticket-thread-${id}`);
+  if (!cell) return;
+  const row = cell.querySelector('td');
+  const willOpen = cell.style.display === 'none';
+  document.querySelectorAll('[id^="admin-ticket-thread-"]').forEach(r => r.style.display = 'none');
+  if (!willOpen) return;
+  cell.style.display = 'table-row';
+  row.innerHTML = '<div style="padding:10px;color:var(--muted);">Loading…</div>';
+  try {
+    const { ticket, messages } = await ticketsApi('messages', { query: { ticketId: id } });
+    const msgHtml = messages.length
+      ? messages.map(m => `<div style="margin-bottom:6px;"><span style="color:${m.sender==='admin'?'var(--orange)':'var(--green)'};font-weight:700;">${m.sender==='admin'?'You':'User'}:</span> ${esc(m.message)}</div>`).join('')
+      : `<div style="color:var(--muted);">${esc(ticket.message)}</div>`;
+    const closed = ticket.status === 'closed';
+    row.innerHTML = `
+      <div style="padding:12px;">
+        <div style="max-height:220px;overflow-y:auto;margin-bottom:8px;font-size:0.82rem;">${msgHtml}</div>
+        ${closed ? `<div style="color:var(--muted);font-size:0.78rem;">Ticket closed.</div>` : `
+          <div style="display:flex;gap:6px;">
+            <input type="text" id="admin-reply-${id}" placeholder="Reply…" style="flex:1;" onkeydown="if(event.key==='Enter')sendAdminReply(${id})"/>
+            <button class="btn-sm" onclick="sendAdminReply(${id})">Send</button>
+            <button class="btn-sm" style="color:var(--red);border-color:var(--red);" onclick="closeAdminTicket(${id})">Close ticket</button>
+          </div>`}
+      </div>`;
+  } catch (e) { row.innerHTML = `<div style="padding:10px;color:var(--red);">${esc(e.message)}</div>`; }
+}
+async function sendAdminReply(id) {
+  const input = document.getElementById(`admin-reply-${id}`);
+  const message = input?.value.trim();
+  if (!message) return;
+  try {
+    await ticketsApi('reply', { method:'POST', body:{ ticketId:id, message } });
+    input.value = '';
+    const cell = document.getElementById(`admin-ticket-thread-${id}`);
+    cell.style.display = 'none'; // force openAdminTicketThread to treat this as opening fresh
+    openAdminTicketThread(id);
+  } catch (e) { toast(e.message); }
+}
+async function closeAdminTicket(id) {
+  try {
+    await ticketsApi('close', { method:'POST', body:{ ticketId:id } });
+    toast('Ticket closed');
+    renderTickets();
+  } catch (e) { toast(e.message); }
 }
 
 async function renderLogs() {
