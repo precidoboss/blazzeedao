@@ -63,7 +63,6 @@ module.exports = async (req, res) => {
     }
 
     if (action === 'list') {
-      if (session.isAdmin) return res.status(400).json({ error: 'Admin: use /api/admin?action=tickets instead' });
       const { data, error } = await supabase.from('support_tickets')
         .select('*').eq('wallet', session.wallet).order('created_at', { ascending: false });
       if (error) throw error;
