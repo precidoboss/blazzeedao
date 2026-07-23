@@ -124,7 +124,7 @@ module.exports = async (req, res) => {
 
     if (action === 'tickets') {
       const { data, error } = await supabase.from('support_tickets')
-        .select('id, wallet, subject, category, message, status, created_at')
+        .select('id, wallet, subject, category, message, status, type, closed_at, created_at')
         .order('created_at', { ascending: false }).limit(100);
       if (error) throw error;
       return res.json({ tickets: data || [] });
