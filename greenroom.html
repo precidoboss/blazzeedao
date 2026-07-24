@@ -5,6 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
 <meta name="robots" content="noindex, nofollow"/>
 <title>404</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"/>
+<link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=DM+Mono:wght@400;500&family=Barlow:wght@400;500;600;700;900&display=swap" rel="stylesheet"/>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/ethers/6.7.0/ethers.umd.min.js"></script>
 <style>
   :root { --bg:#0A0A0A; --panel:#141414; --border:#2a2a2a; --text:#eee; --muted:#888; --orange:#FF6B1A; --red:#E8350A; --green:#22D47A; }
@@ -40,6 +42,35 @@
   .save-btn { background:var(--orange); color:#000; border:none; padding:8px 16px; border-radius:6px; font-weight:700; cursor:pointer; }
   .empty { color:var(--muted); font-size:0.82rem; padding:20px; text-align:center; }
   .toast { position:fixed; bottom:20px; right:20px; background:var(--panel); border:1px solid var(--border); padding:10px 16px; border-radius:8px; font-size:0.82rem; z-index:99; }
+
+  /* ---- Studio (image generator) ---- */
+  .studio-layout { display:flex; gap:14px; flex-wrap:wrap; align-items:flex-start; }
+  .studio-col { background:var(--panel); border:1px solid var(--border); border-radius:10px; padding:12px; }
+  .studio-sidebar { width:200px; flex-shrink:0; }
+  .studio-props { width:210px; flex-shrink:0; }
+  .studio-canvas-wrap { flex:1; min-width:280px; display:flex; flex-direction:column; align-items:center; gap:8px; }
+  #studio-cv { width:100%; max-width:640px; border:1px solid var(--border); border-radius:8px; background:#000; touch-action:none; }
+  .studio-section-lbl { font-size:0.68rem; color:var(--muted); text-transform:uppercase; letter-spacing:0.04em; margin:12px 0 6px; }
+  .studio-section-lbl:first-child { margin-top:0; }
+  .studio-btn { width:100%; background:transparent; border:1px solid var(--border); color:var(--text); padding:7px 8px; border-radius:6px; cursor:pointer; font-size:0.76rem; margin-bottom:5px; text-align:left; }
+  .studio-btn:hover { border-color:var(--orange); color:var(--orange); }
+  .studio-preset-row { display:flex; gap:4px; flex-wrap:wrap; }
+  .studio-preset-row button { flex:1 1 45%; background:transparent; border:1px solid var(--border); color:var(--muted); padding:6px 4px; border-radius:6px; cursor:pointer; font-size:0.68rem; }
+  .studio-preset-row button:hover { border-color:var(--orange); color:var(--orange); }
+  .studio-size-row { display:flex; gap:4px; }
+  .studio-size-row button { flex:1; background:transparent; border:1px solid var(--border); color:var(--muted); padding:6px 4px; border-radius:6px; cursor:pointer; font-size:0.68rem; }
+  .studio-size-row button.active { border-color:var(--orange); color:var(--orange); background:rgba(255,107,26,0.08); }
+  .studio-layer-item { display:flex; align-items:center; justify-content:space-between; gap:6px; padding:6px 8px; border-radius:6px; font-size:0.74rem; cursor:pointer; border:1px solid transparent; }
+  .studio-layer-item:hover { background:rgba(255,255,255,0.03); }
+  .studio-layer-item.active { border-color:var(--orange); background:rgba(255,107,26,0.08); }
+  .studio-layer-item button { background:none; border:none; color:var(--muted); cursor:pointer; font-size:0.8rem; }
+  .studio-layer-item button:hover { color:var(--red); }
+  .studio-props label { display:block; font-size:0.68rem; color:var(--muted); text-transform:uppercase; letter-spacing:0.04em; margin:10px 0 4px; }
+  .studio-props label:first-child { margin-top:0; }
+  .studio-props input[type=color] { width:100%; height:30px; padding:2px; background:#0d0d0d; border:1px solid var(--border); border-radius:6px; cursor:pointer; }
+  .studio-props input[type=range] { width:100%; }
+  .studio-props select { width:100%; background:#0d0d0d; border:1px solid var(--border); color:var(--text); border-radius:6px; padding:6px; font-size:0.78rem; }
+  .studio-props textarea { min-height:60px; }
 </style>
 </head>
 <body>
@@ -62,6 +93,7 @@
     <button data-tab="flags" onclick="showTab('flags')">Flags</button>
     <button data-tab="tickets" onclick="showTab('tickets')">Support Tickets</button>
     <button data-tab="logs" onclick="showTab('logs')">Error Logs</button>
+    <button data-tab="studio" onclick="showTab('studio')">🎨 Studio</button>
   </nav>
   <main id="main"></main>
 </div>
@@ -146,7 +178,7 @@ function showTab(tab) {
   document.querySelectorAll('nav.tabs button').forEach(b => b.classList.toggle('active', b.dataset.tab === tab));
   const main = document.getElementById('main');
   main.innerHTML = '<div class="empty">Loading…</div>';
-  ({ overview: renderOverview, announcement: renderAnnouncement, flags: renderFlags, tickets: renderTickets, logs: renderLogs })[tab]();
+  ({ overview: renderOverview, announcement: renderAnnouncement, flags: renderFlags, tickets: renderTickets, logs: renderLogs, studio: renderStudio })[tab]();
 }
 
 async function renderOverview() {
@@ -294,6 +326,367 @@ async function renderLogs() {
       ? `<table><thead><tr><th>Message</th><th>Page</th><th>Wallet</th><th>When</th></tr></thead><tbody>${rows}</tbody></table>`
       : `<div class="empty">No errors logged. 🎉</div>`;
   } catch (e) { document.getElementById('main').innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
+}
+
+// ==================== STUDIO (image generator) ====================
+// A layered canvas editor — no AI, just your own text, uploaded images,
+// and the brand's flame mark composited together. Everything is a
+// draggable/resizable layer: click to select, drag to move, use the
+// bottom-right handle to resize. Presets just pre-fill layers as a
+// starting point; nothing is locked after that.
+
+let studioSize = { w: 1200, h: 675 };
+let studioBg = { c1: '#0A0A0A', c2: '#161010', img: null };
+let studioLayers = [];
+let studioSelectedId = null;
+let studioNextId = 1;
+let studioCanvas, studioCtx, studioDrag = null;
+
+const STUDIO_ACCENT = { c1: '#E8350A', c2: '#FF9500' };
+
+function studioNewId() { return studioNextId++; }
+
+function studioAddText(opts = {}) {
+  const l = {
+    id: studioNewId(), type: 'text',
+    x: 80, y: 260, w: 600, h: 100,
+    text: opts.text || 'Your text here',
+    font: opts.font || 'Barlow', weight: opts.weight || '700',
+    size: opts.size || 48, color: opts.color || '#F0F0F0',
+    align: opts.align || 'left', gradient: !!opts.gradient,
+    ...opts
+  };
+  studioLayers.push(l);
+  studioSelectedId = l.id;
+  return l;
+}
+function studioAddImage(imgEl, opts = {}) {
+  const maxW = 400;
+  const scale = Math.min(1, maxW / imgEl.width);
+  const l = {
+    id: studioNewId(), type: 'image',
+    x: 400, y: 200, w: imgEl.width * scale, h: imgEl.height * scale,
+    img: imgEl, ...opts
+  };
+  studioLayers.push(l);
+  studioSelectedId = l.id;
+  return l;
+}
+function studioAddFlame(opts = {}) {
+  const l = { id: studioNewId(), type: 'flame', x: 80, y: 60, w: 60, h: 60, ...opts };
+  studioLayers.push(l);
+  studioSelectedId = l.id;
+  return l;
+}
+
+function studioApplyPreset(name) {
+  studioLayers = [];
+  studioBg = { c1: '#0A0A0A', c2: '#161010', img: null };
+  if (name === 'blank') { /* nothing */ }
+  else if (name === 'announcement') {
+    studioAddFlame({ x: 70, y: 50, w: 44, h: 44 });
+    studioAddText({ x: 140, y: 58, w: 500, h: 50, text: 'BLAZEDAO', font: 'Bebas Neue', size: 34, color: '#F0F0F0' });
+    studioAddText({ x: 80, y: 220, w: 1040, h: 150, text: 'Big Announcement', font: 'Bebas Neue', size: 110, gradient: true });
+    studioAddText({ x: 80, y: 420, w: 1000, h: 80, text: 'A short line of supporting detail goes here.', font: 'Barlow', weight: '500', size: 32, color: '#ABABAB' });
+  } else if (name === 'quote') {
+    studioAddText({ x: 100, y: 180, w: 1000, h: 60, text: '“', font: 'Bebas Neue', size: 120, gradient: true });
+    studioAddText({ x: 100, y: 280, w: 1000, h: 220, text: 'Drop your quote here — something worth screenshotting.', font: 'Barlow', weight: '700', size: 46, color: '#F0F0F0' });
+    studioAddText({ x: 100, y: 560, w: 800, h: 50, text: '— attribution', font: 'DM Mono', size: 24, color: '#8A8A8A' });
+  } else if (name === 'bounty') {
+    studioAddText({ x: 80, y: 150, w: 500, h: 40, text: 'NEW BOUNTY', font: 'DM Mono', size: 22, color: '#FF9500' });
+    studioAddText({ x: 78, y: 200, w: 900, h: 150, text: '5,000 $BLAZE', font: 'Bebas Neue', size: 130, gradient: true });
+    studioAddText({ x: 80, y: 400, w: 1000, h: 80, text: "Best clip from tonight's stream wins", font: 'Barlow', weight: '500', size: 36, color: '#F0F0F0' });
+    studioAddText({ x: 80, y: 560, w: 900, h: 40, text: '@yourstream   ·   48 hours left', font: 'DM Mono', size: 24, color: '#8A8A8A' });
+  } else if (name === 'winner') {
+    studioAddText({ x: 80, y: 160, w: 400, h: 40, text: '🏆 WINNER', font: 'DM Mono', size: 24, color: '#FF9500' });
+    studioAddText({ x: 78, y: 220, w: 900, h: 110, text: '@topclipper', font: 'Bebas Neue', size: 100, color: '#F0F0F0' });
+    studioAddText({ x: 80, y: 330, w: 700, h: 90, text: '2,500 $BLAZE', font: 'Bebas Neue', size: 70, gradient: true });
+    studioAddText({ x: 80, y: 440, w: 1000, h: 60, text: "for: Best clip from tonight's stream", font: 'Barlow', size: 30, color: '#8A8A8A' });
+  } else if (name === 'milestone') {
+    studioAddText({ x: 78, y: 230, w: 900, h: 170, text: '10,000', font: 'Bebas Neue', size: 170, gradient: true });
+    studioAddText({ x: 80, y: 420, w: 1000, h: 60, text: '$BLAZE PAID OUT TO CLIPPERS', font: 'Barlow', weight: '700', size: 34, color: '#F0F0F0' });
+    studioAddText({ x: 80, y: 480, w: 1000, h: 40, text: 'and counting — join the testnet', font: 'DM Mono', size: 22, color: '#8A8A8A' });
+  }
+  studioSelectedId = null;
+  drawStudio();
+  studioRenderLayerList();
+  studioRenderProps();
+}
+
+function studioSetSize(w, h) {
+  studioSize = { w, h };
+  studioCanvas.width = w; studioCanvas.height = h;
+  document.querySelectorAll('.studio-size-row button').forEach(b => b.classList.toggle('active', Number(b.dataset.w) === w));
+  drawStudio();
+}
+
+function studioWrapText(text, x, y, maxWidth, lineHeight) {
+  const words = String(text).split(' ');
+  let line = '', lines = [];
+  for (const w of words) {
+    const test = line ? line + ' ' + w : w;
+    if (studioCtx.measureText(test).width > maxWidth && line) { lines.push(line); line = w; }
+    else line = test;
+  }
+  lines.push(line);
+  lines.forEach((l, i) => studioCtx.fillText(l, x, y + i * lineHeight));
+}
+
+function studioDrawFlamePath(x, y, w, h, fillStyle) {
+  const ctx = studioCtx;
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.scale(w / 24, h / 24);
+  ctx.beginPath();
+  ctx.moveTo(13, 2); ctx.lineTo(4, 14); ctx.lineTo(10, 14); ctx.lineTo(9, 22); ctx.lineTo(19, 10); ctx.lineTo(12, 10); ctx.closePath();
+  ctx.fillStyle = fillStyle;
+  ctx.fill();
+  ctx.restore();
+}
+
+function drawStudio() {
+  const ctx = studioCtx, { w, h } = studioSize;
+  ctx.clearRect(0, 0, w, h);
+
+  // background
+  if (studioBg.img) {
+    const scale = Math.max(w / studioBg.img.width, h / studioBg.img.height);
+    const iw = studioBg.img.width * scale, ih = studioBg.img.height * scale;
+    ctx.drawImage(studioBg.img, (w - iw) / 2, (h - ih) / 2, iw, ih);
+    ctx.fillStyle = 'rgba(0,0,0,0.35)'; ctx.fillRect(0, 0, w, h); // keep text legible over photos
+  } else {
+    const bg = ctx.createLinearGradient(0, 0, w, h);
+    bg.addColorStop(0, studioBg.c1); bg.addColorStop(1, studioBg.c2);
+    ctx.fillStyle = bg; ctx.fillRect(0, 0, w, h);
+  }
+  ctx.strokeStyle = 'rgba(255,255,255,0.06)'; ctx.lineWidth = 2;
+  ctx.strokeRect(1, 1, w - 2, h - 2);
+
+  for (const l of studioLayers) {
+    ctx.save();
+    if (l.type === 'image') {
+      ctx.drawImage(l.img, l.x, l.y, l.w, l.h);
+    } else if (l.type === 'flame') {
+      const g = ctx.createLinearGradient(l.x, l.y, l.x + l.w, l.y + l.h);
+      g.addColorStop(0, STUDIO_ACCENT.c1); g.addColorStop(1, STUDIO_ACCENT.c2);
+      studioDrawFlamePath(l.x, l.y, l.w, l.h, g);
+    } else if (l.type === 'text') {
+      ctx.font = `${l.weight || '400'} ${l.size}px '${l.font}'`;
+      ctx.textAlign = l.align || 'left';
+      ctx.textBaseline = 'alphabetic';
+      if (l.gradient) {
+        const g = ctx.createLinearGradient(l.x, l.y, l.x + l.w, l.y);
+        g.addColorStop(0, STUDIO_ACCENT.c1); g.addColorStop(1, STUDIO_ACCENT.c2);
+        ctx.fillStyle = g;
+      } else {
+        ctx.fillStyle = l.color || '#F0F0F0';
+      }
+      const tx = l.align === 'center' ? l.x + l.w / 2 : l.align === 'right' ? l.x + l.w : l.x;
+      studioWrapText(l.text, tx, l.y + l.size, l.w, l.size * 1.15);
+    }
+    ctx.restore();
+
+    if (l.id === studioSelectedId) {
+      ctx.save();
+      ctx.strokeStyle = '#FF9500'; ctx.lineWidth = 2; ctx.setLineDash([6, 4]);
+      ctx.strokeRect(l.x, l.y, l.w, l.h);
+      ctx.setLineDash([]);
+      ctx.fillStyle = '#FF9500';
+      ctx.fillRect(l.x + l.w - 10, l.y + l.h - 10, 14, 14);
+      ctx.restore();
+    }
+  }
+}
+
+function studioCanvasCoords(evt) {
+  const rect = studioCanvas.getBoundingClientRect();
+  const scaleX = studioCanvas.width / rect.width, scaleY = studioCanvas.height / rect.height;
+  const cx = (evt.touches ? evt.touches[0].clientX : evt.clientX) - rect.left;
+  const cy = (evt.touches ? evt.touches[0].clientY : evt.clientY) - rect.top;
+  return { x: cx * scaleX, y: cy * scaleY };
+}
+
+function studioHitTest(x, y) {
+  for (let i = studioLayers.length - 1; i >= 0; i--) {
+    const l = studioLayers[i];
+    const onHandle = x >= l.x + l.w - 16 && x <= l.x + l.w + 4 && y >= l.y + l.h - 16 && y <= l.y + l.h + 4;
+    if (onHandle) return { layer: l, mode: 'resize' };
+    if (x >= l.x && x <= l.x + l.w && y >= l.y && y <= l.y + l.h) return { layer: l, mode: 'move' };
+  }
+  return null;
+}
+
+function studioAttachEvents() {
+  const down = (evt) => {
+    const { x, y } = studioCanvasCoords(evt);
+    const hit = studioHitTest(x, y);
+    if (hit) {
+      studioSelectedId = hit.layer.id;
+      studioDrag = { mode: hit.mode, layer: hit.layer, startX: x, startY: y, origX: hit.layer.x, origY: hit.layer.y, origW: hit.layer.w, origH: hit.layer.h };
+    } else {
+      studioSelectedId = null;
+    }
+    drawStudio(); studioRenderLayerList(); studioRenderProps();
+  };
+  const move = (evt) => {
+    if (!studioDrag) return;
+    evt.preventDefault();
+    const { x, y } = studioCanvasCoords(evt);
+    const dx = x - studioDrag.startX, dy = y - studioDrag.startY;
+    const l = studioDrag.layer;
+    if (studioDrag.mode === 'move') { l.x = studioDrag.origX + dx; l.y = studioDrag.origY + dy; }
+    else { l.w = Math.max(20, studioDrag.origW + dx); l.h = Math.max(20, studioDrag.origH + dy); }
+    drawStudio();
+  };
+  const up = () => { studioDrag = null; };
+  studioCanvas.onmousedown = down; studioCanvas.onmousemove = move;
+  window.addEventListener('mouseup', up);
+  studioCanvas.ontouchstart = down; studioCanvas.ontouchmove = move; studioCanvas.ontouchend = up;
+}
+
+function studioRenderLayerList() {
+  const el = document.getElementById('studio-layers');
+  if (!el) return;
+  if (!studioLayers.length) { el.innerHTML = '<div style="color:var(--muted);font-size:0.72rem;">No layers yet.</div>'; return; }
+  el.innerHTML = studioLayers.map(l => `
+    <div class="studio-layer-item ${l.id === studioSelectedId ? 'active' : ''}" onclick="studioSelectLayer(${l.id})">
+      <span>${l.type === 'text' ? '🔤 ' + esc(l.text.slice(0, 16)) : l.type === 'image' ? '🖼 Image' : '🔥 Flame'}</span>
+      <button onclick="event.stopPropagation();studioDeleteLayer(${l.id})">✕</button>
+    </div>`).join('');
+}
+function studioSelectLayer(id) { studioSelectedId = id; drawStudio(); studioRenderLayerList(); studioRenderProps(); }
+function studioDeleteLayer(id) {
+  studioLayers = studioLayers.filter(l => l.id !== id);
+  if (studioSelectedId === id) studioSelectedId = null;
+  drawStudio(); studioRenderLayerList(); studioRenderProps();
+}
+
+function studioRenderProps() {
+  const el = document.getElementById('studio-props-body');
+  if (!el) return;
+  const l = studioLayers.find(x => x.id === studioSelectedId);
+  if (!l) { el.innerHTML = '<div style="color:var(--muted);font-size:0.72rem;">Click a layer to edit it.</div>'; return; }
+  if (l.type === 'text') {
+    el.innerHTML = `
+      <label>Text</label>
+      <textarea oninput="studioUpdateLayer(${l.id},{text:this.value})">${esc(l.text)}</textarea>
+      <label>Font</label>
+      <select onchange="studioUpdateLayer(${l.id},{font:this.value})">
+        ${['Bebas Neue','Barlow','DM Mono'].map(f => `<option ${l.font===f?'selected':''} value="${f}">${f}</option>`).join('')}
+      </select>
+      <label>Size (${l.size}px)</label>
+      <input type="range" min="14" max="200" value="${l.size}" oninput="studioUpdateLayer(${l.id},{size:Number(this.value)})"/>
+      <label>Align</label>
+      <select onchange="studioUpdateLayer(${l.id},{align:this.value})">
+        ${['left','center','right'].map(a => `<option ${l.align===a?'selected':''} value="${a}">${a}</option>`).join('')}
+      </select>
+      <label><input type="checkbox" ${l.gradient?'checked':''} onchange="studioUpdateLayer(${l.id},{gradient:this.checked})"/> Use brand gradient</label>
+      ${!l.gradient ? `<label>Color</label><input type="color" value="${l.color}" oninput="studioUpdateLayer(${l.id},{color:this.value})"/>` : ''}
+    `;
+  } else if (l.type === 'flame' || l.type === 'image') {
+    el.innerHTML = `<div style="color:var(--muted);font-size:0.72rem;">Drag to move, use the corner handle to resize.</div>`;
+  }
+}
+function studioUpdateLayer(id, patch) {
+  const l = studioLayers.find(x => x.id === id);
+  if (!l) return;
+  Object.assign(l, patch);
+  drawStudio();
+  if (patch.text !== undefined) studioRenderLayerList();
+}
+
+function studioUploadImage(fileInput) {
+  const file = fileInput.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    const img = new Image();
+    img.onload = () => { studioAddImage(img); drawStudio(); studioRenderLayerList(); studioRenderProps(); };
+    img.src = e.target.result;
+  };
+  reader.readAsDataURL(file);
+  fileInput.value = '';
+}
+function studioUploadBackground(fileInput) {
+  const file = fileInput.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    const img = new Image();
+    img.onload = () => { studioBg.img = img; drawStudio(); };
+    img.src = e.target.result;
+  };
+  reader.readAsDataURL(file);
+  fileInput.value = '';
+}
+function studioClearBackgroundImage() { studioBg.img = null; drawStudio(); }
+function studioSetBgColor(which, val) { studioBg[which] = val; drawStudio(); }
+
+function studioDownload() {
+  studioSelectedId = null; // hide selection outline in the exported image
+  drawStudio();
+  const link = document.createElement('a');
+  link.download = `blazedao-studio-${Date.now()}.png`;
+  link.href = studioCanvas.toDataURL('image/png');
+  link.click();
+}
+
+function renderStudio() {
+  document.getElementById('main').innerHTML = `
+    <div class="studio-layout">
+      <div class="studio-col studio-sidebar">
+        <div class="studio-section-lbl">Canvas Size</div>
+        <div class="studio-size-row">
+          <button class="active" data-w="1200" onclick="studioSetSize(1200,675)">X Post</button>
+          <button data-w="1080" onclick="studioSetSize(1080,1080)">Square</button>
+        </div>
+
+        <div class="studio-section-lbl">Presets</div>
+        <div class="studio-preset-row">
+          <button onclick="studioApplyPreset('announcement')">Announce</button>
+          <button onclick="studioApplyPreset('quote')">Quote</button>
+          <button onclick="studioApplyPreset('bounty')">Bounty</button>
+          <button onclick="studioApplyPreset('winner')">Winner</button>
+          <button onclick="studioApplyPreset('milestone')">Milestone</button>
+          <button onclick="studioApplyPreset('blank')">Blank</button>
+        </div>
+
+        <div class="studio-section-lbl">Add</div>
+        <button class="studio-btn" onclick="studioAddText();drawStudio();studioRenderLayerList();studioRenderProps();">➕ Add Text</button>
+        <button class="studio-btn" onclick="document.getElementById('studio-img-input').click()">🖼 Add Image (e.g. Blaze hero)</button>
+        <input type="file" id="studio-img-input" accept="image/*" style="display:none;" onchange="studioUploadImage(this)"/>
+        <button class="studio-btn" onclick="studioAddFlame();drawStudio();studioRenderLayerList();studioRenderProps();">🔥 Add Flame Mark</button>
+
+        <div class="studio-section-lbl">Background</div>
+        <div style="display:flex;gap:6px;margin-bottom:6px;">
+          <input type="color" value="${studioBg.c1}" oninput="studioSetBgColor('c1',this.value)" style="flex:1;height:30px;background:#0d0d0d;border:1px solid var(--border);border-radius:6px;"/>
+          <input type="color" value="${studioBg.c2}" oninput="studioSetBgColor('c2',this.value)" style="flex:1;height:30px;background:#0d0d0d;border:1px solid var(--border);border-radius:6px;"/>
+        </div>
+        <button class="studio-btn" onclick="document.getElementById('studio-bg-input').click()">Upload Background Image</button>
+        <input type="file" id="studio-bg-input" accept="image/*" style="display:none;" onchange="studioUploadBackground(this)"/>
+        <button class="studio-btn" onclick="studioClearBackgroundImage()">Clear Background Image</button>
+
+        <div class="studio-section-lbl">Layers</div>
+        <div id="studio-layers"></div>
+      </div>
+
+      <div class="studio-canvas-wrap">
+        <canvas id="studio-cv" width="${studioSize.w}" height="${studioSize.h}"></canvas>
+        <button class="save-btn" style="width:100%;max-width:640px;" onclick="studioDownload()">Download PNG</button>
+      </div>
+
+      <div class="studio-col studio-props">
+        <div class="studio-section-lbl">Selected Layer</div>
+        <div id="studio-props-body"></div>
+      </div>
+    </div>
+  `;
+  studioCanvas = document.getElementById('studio-cv');
+  studioCtx = studioCanvas.getContext('2d');
+  studioAttachEvents();
+  if (!studioLayers.length) studioApplyPreset('announcement');
+  else { drawStudio(); studioRenderLayerList(); studioRenderProps(); }
+  document.fonts.ready.then(drawStudio);
 }
 
 // If we already have a session token, skip the gate.
