@@ -621,6 +621,21 @@ function studioUploadBackground(fileInput) {
 }
 function studioClearBackgroundImage() { studioBg.img = null; drawStudio(); }
 function studioSetBgColor(which, val) { studioBg[which] = val; drawStudio(); }
+function studioSetBgPreset(c1, c2) {
+  studioBg.c1 = c1; studioBg.c2 = c2; studioBg.img = null;
+  const i1 = document.getElementById('studio-bg-c1'), i2 = document.getElementById('studio-bg-c2');
+  if (i1) i1.value = c1; if (i2) i2.value = c2;
+  drawStudio();
+}
+
+const STUDIO_BG_PRESETS = [
+  { name: 'Blaze Dark',  c1: '#0A0A0A', c2: '#181818' },
+  { name: 'Flame',       c1: '#E8350A', c2: '#FF9500' },
+  { name: 'Amber',       c1: '#111111', c2: '#FF6B1A' },
+  { name: 'Black',       c1: '#0A0A0A', c2: '#0A0A0A' },
+  { name: 'Card',        c1: '#181818', c2: '#181818' },
+  { name: 'Success',     c1: '#0A0A0A', c2: '#22C55E' }
+];
 
 function studioDownload() {
   studioSelectedId = null; // hide selection outline in the exported image
@@ -658,9 +673,14 @@ function renderStudio() {
         <button class="studio-btn" onclick="studioAddFlame();drawStudio();studioRenderLayerList();studioRenderProps();">🔥 Add Flame Mark</button>
 
         <div class="studio-section-lbl">Background</div>
+        <div class="studio-preset-row" style="margin-bottom:8px;">
+          ${STUDIO_BG_PRESETS.map(p => `
+            <button title="${p.name}" style="height:30px;flex:1 1 30%;padding:0;border-radius:6px;background:linear-gradient(90deg,${p.c1},${p.c2});border:1px solid var(--border);" onclick="studioSetBgPreset('${p.c1}','${p.c2}')"></button>
+          `).join('')}
+        </div>
         <div style="display:flex;gap:6px;margin-bottom:6px;">
-          <input type="color" value="${studioBg.c1}" oninput="studioSetBgColor('c1',this.value)" style="flex:1;height:30px;background:#0d0d0d;border:1px solid var(--border);border-radius:6px;"/>
-          <input type="color" value="${studioBg.c2}" oninput="studioSetBgColor('c2',this.value)" style="flex:1;height:30px;background:#0d0d0d;border:1px solid var(--border);border-radius:6px;"/>
+          <input id="studio-bg-c1" type="color" value="${studioBg.c1}" oninput="studioSetBgColor('c1',this.value)" style="flex:1;height:30px;background:#0d0d0d;border:1px solid var(--border);border-radius:6px;"/>
+          <input id="studio-bg-c2" type="color" value="${studioBg.c2}" oninput="studioSetBgColor('c2',this.value)" style="flex:1;height:30px;background:#0d0d0d;border:1px solid var(--border);border-radius:6px;"/>
         </div>
         <button class="studio-btn" onclick="document.getElementById('studio-bg-input').click()">Upload Background Image</button>
         <input type="file" id="studio-bg-input" accept="image/*" style="display:none;" onchange="studioUploadBackground(this)"/>
